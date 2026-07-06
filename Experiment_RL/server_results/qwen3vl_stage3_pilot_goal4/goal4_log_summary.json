@@ -1,0 +1,705 @@
+{
+  "qwen3vl8b_stage3_a1_long_answer_pilot_trainonly_prompt4096_seed42.log": {
+    "summary": {
+      "steps_seen": 50,
+      "last_step": 50,
+      "training_global_step": {
+        "first": 1.0,
+        "last": 50.0,
+        "mean": 25.5,
+        "min": 1.0,
+        "max": 50.0
+      },
+      "critic_score_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.82,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "critic_score_max": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.9,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "critic_score_min": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.74,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "critic_rewards_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.82,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "actor_grad_norm": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.00609384760260582,
+        "min": 0.0,
+        "max": 0.06240203604102135
+      },
+      "actor_loss": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": -0.004440950453281403,
+        "min": -0.2591404318809509,
+        "max": 0.21780329942703247
+      },
+      "response_length_mean": {
+        "first": 4151.5,
+        "last": 5149.5,
+        "mean": 4399.17,
+        "min": 988.0,
+        "max": 14065.5
+      },
+      "response_length_max": {
+        "first": 6815.0,
+        "last": 5470.0,
+        "mean": 5396.06,
+        "min": 1167.0,
+        "max": 16384.0
+      },
+      "response_length_min": {
+        "first": 1488.0,
+        "last": 4829.0,
+        "mean": 3402.28,
+        "min": 767.0,
+        "max": 11747.0
+      },
+      "response_length_clip_ratio": {
+        "first": 0.5,
+        "last": 0.5,
+        "mean": 0.5,
+        "min": 0.5,
+        "max": 0.5
+      },
+      "prompt_length_mean": {
+        "first": 185.0,
+        "last": 151.0,
+        "mean": 437.88,
+        "min": 151.0,
+        "max": 3798.0
+      },
+      "timing_s_gen": {
+        "first": 56.81461480399594,
+        "last": 42.76804920099676,
+        "mean": 42.61139402889996,
+        "min": 10.622948245028965,
+        "max": 130.89621558604995
+      },
+      "timing_s_adv": {
+        "first": 0.09242875798372552,
+        "last": 0.08751704200403765,
+        "mean": 0.0874764378007967,
+        "min": 0.07887859898619354,
+        "max": 0.099036747997161
+      },
+      "timing_s_update_actor": {
+        "first": 6.407180724025238,
+        "last": 6.7392116859555244,
+        "mean": 7.64751656489796,
+        "min": 1.338769682974089,
+        "max": 36.1197332359734
+      },
+      "timing_s_update_weights": {
+        "first": 27.101899878005497,
+        "last": 25.113248992012814,
+        "mean": 25.866851482058408,
+        "min": 24.61868500401033,
+        "max": 27.101899878005497
+      },
+      "timing_s_step": {
+        "first": 100.59844464098569,
+        "last": 77.09618927701376,
+        "mean": 78.86433334117523,
+        "min": 38.64256735902745,
+        "max": 202.87437750399113
+      },
+      "actor_perf_max_memory_allocated_gb": {
+        "first": 45.273006439208984,
+        "last": 75.68736505508423,
+        "mean": 72.31226887702942,
+        "min": 45.273006439208984,
+        "max": 75.68736505508423
+      },
+      "actor_perf_max_memory_reserved_gb": {
+        "first": 54.560546875,
+        "last": 102.16015625,
+        "mean": 96.9840234375,
+        "min": 54.560546875,
+        "max": 102.16015625
+      },
+      "actor_perf_cpu_memory_used_gb": {
+        "first": 31.043636322021484,
+        "last": 32.80528259277344,
+        "mean": 31.63915657043457,
+        "min": 31.026386260986328,
+        "max": 33.145713806152344
+      }
+    },
+    "markers": [
+      {
+        "pattern": "EXIT_CODE=0",
+        "count": 2
+      }
+    ]
+  },
+  "qwen3vl8b_stage3_c2_zscore_pilot_trainonly_prompt4096_cpu_probe_smoke3_seed42.log": {
+    "summary": {
+      "steps_seen": 1,
+      "last_step": 1,
+      "training_global_step": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "critic_score_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "critic_score_max": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "critic_score_min": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "critic_rewards_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "actor_grad_norm": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "actor_loss": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "response_length_mean": {
+        "first": 4151.5,
+        "last": 4151.5,
+        "mean": 4151.5,
+        "min": 4151.5,
+        "max": 4151.5
+      },
+      "response_length_max": {
+        "first": 6815.0,
+        "last": 6815.0,
+        "mean": 6815.0,
+        "min": 6815.0,
+        "max": 6815.0
+      },
+      "response_length_min": {
+        "first": 1488.0,
+        "last": 1488.0,
+        "mean": 1488.0,
+        "min": 1488.0,
+        "max": 1488.0
+      },
+      "response_length_clip_ratio": {
+        "first": 0.5,
+        "last": 0.5,
+        "mean": 0.5,
+        "min": 0.5,
+        "max": 0.5
+      },
+      "prompt_length_mean": {
+        "first": 185.0,
+        "last": 185.0,
+        "mean": 185.0,
+        "min": 185.0,
+        "max": 185.0
+      },
+      "timing_s_gen": {
+        "first": 617.7117292470066,
+        "last": 617.7117292470066,
+        "mean": 617.7117292470066,
+        "min": 617.7117292470066,
+        "max": 617.7117292470066
+      },
+      "timing_s_adv": {
+        "first": 0.13244055001996458,
+        "last": 0.13244055001996458,
+        "mean": 0.13244055001996458,
+        "min": 0.13244055001996458,
+        "max": 0.13244055001996458
+      },
+      "timing_s_update_actor": {
+        "first": 6.3807583990274,
+        "last": 6.3807583990274,
+        "mean": 6.3807583990274,
+        "min": 6.3807583990274,
+        "max": 6.3807583990274
+      },
+      "timing_s_update_weights": {
+        "first": 29.609275242022704,
+        "last": 29.609275242022704,
+        "mean": 29.609275242022704,
+        "min": 29.609275242022704,
+        "max": 29.609275242022704
+      },
+      "timing_s_step": {
+        "first": 664.4153623540187,
+        "last": 664.4153623540187,
+        "mean": 664.4153623540187,
+        "min": 664.4153623540187,
+        "max": 664.4153623540187
+      },
+      "actor_perf_max_memory_allocated_gb": {
+        "first": 45.273006439208984,
+        "last": 45.273006439208984,
+        "mean": 45.273006439208984,
+        "min": 45.273006439208984,
+        "max": 45.273006439208984
+      },
+      "actor_perf_max_memory_reserved_gb": {
+        "first": 54.560546875,
+        "last": 54.560546875,
+        "mean": 54.560546875,
+        "min": 54.560546875,
+        "max": 54.560546875
+      },
+      "actor_perf_cpu_memory_used_gb": {
+        "first": 63.96871566772461,
+        "last": 63.96871566772461,
+        "mean": 63.96871566772461,
+        "min": 63.96871566772461,
+        "max": 63.96871566772461
+      },
+      "c2_frac_groups_with_nonzero_b_gain_std": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "c2_frac_groups_where_b_gain_changes_ranking": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "c2_frac_all_same_answer_groups_with_b_gain_ranking": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "c2_within_group_corr_answer_b_gain_mean": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    "markers": []
+  },
+  "qwen3vl8b_stage3_c2_zscore_pilot_trainonly_prompt4096_gpu040_seed42.log": {
+    "summary": {
+      "steps_seen": 15,
+      "last_step": 15,
+      "training_global_step": {
+        "first": 1.0,
+        "last": 15.0,
+        "mean": 8.0,
+        "min": 1.0,
+        "max": 15.0
+      },
+      "critic_score_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.8666666666666667,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "critic_score_max": {
+        "first": 1.0,
+        "last": 1.2000000476837158,
+        "mean": 1.0133333534002305,
+        "min": 0.20000000298023224,
+        "max": 1.2000000476837158
+      },
+      "critic_score_min": {
+        "first": 1.0,
+        "last": 0.800000011920929,
+        "mean": 0.7200000047683716,
+        "min": -0.20000000298023224,
+        "max": 1.0
+      },
+      "critic_rewards_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.8666666666666667,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "actor_grad_norm": {
+        "first": 0.0,
+        "last": 0.0690508559346199,
+        "mean": 0.030032505095005036,
+        "min": 0.0,
+        "max": 0.07641896605491638
+      },
+      "actor_loss": {
+        "first": 0.0,
+        "last": -0.018871765583753586,
+        "mean": 0.007513586183389028,
+        "min": -0.20702850818634033,
+        "max": 0.2971653938293457
+      },
+      "response_length_mean": {
+        "first": 4151.5,
+        "last": 1517.5,
+        "mean": 3592.766666666667,
+        "min": 988.0,
+        "max": 12478.5
+      },
+      "response_length_max": {
+        "first": 6815.0,
+        "last": 1558.0,
+        "mean": 4520.333333333333,
+        "min": 1167.0,
+        "max": 16132.0
+      },
+      "response_length_min": {
+        "first": 1488.0,
+        "last": 1477.0,
+        "mean": 2665.2,
+        "min": 767.0,
+        "max": 8825.0
+      },
+      "response_length_clip_ratio": {
+        "first": 0.5,
+        "last": 0.5,
+        "mean": 0.5,
+        "min": 0.5,
+        "max": 0.5
+      },
+      "prompt_length_mean": {
+        "first": 185.0,
+        "last": 513.0,
+        "mean": 327.8666666666667,
+        "min": 159.0,
+        "max": 2082.0
+      },
+      "timing_s_gen": {
+        "first": 56.7968284249655,
+        "last": 14.653337157971691,
+        "mean": 37.238131531859594,
+        "min": 10.639206669991836,
+        "max": 126.8889206929598
+      },
+      "timing_s_adv": {
+        "first": 0.13002932001836598,
+        "last": 0.1265140530304052,
+        "mean": 0.12744162279802065,
+        "min": 0.12390023801708594,
+        "max": 0.13317060697590932
+      },
+      "timing_s_update_actor": {
+        "first": 6.348028847016394,
+        "last": 2.191175337997265,
+        "mean": 6.453341819272222,
+        "min": 1.3197098749806173,
+        "max": 28.1481296630227
+      },
+      "timing_s_update_weights": {
+        "first": 28.049907961976714,
+        "last": 26.049984737008344,
+        "mean": 26.10620560987542,
+        "min": 24.828427510045003,
+        "max": 28.049907961976714
+      },
+      "timing_s_step": {
+        "first": 101.59132327896077,
+        "last": 44.08925961796194,
+        "mean": 72.57358138439012,
+        "min": 37.71552042802796,
+        "max": 188.5575921740383
+      },
+      "actor_perf_max_memory_allocated_gb": {
+        "first": 45.273006439208984,
+        "last": 69.77841520309448,
+        "mean": 64.43704446156819,
+        "min": 45.273006439208984,
+        "max": 69.77841520309448
+      },
+      "actor_perf_max_memory_reserved_gb": {
+        "first": 54.560546875,
+        "last": 93.78515625,
+        "mean": 85.215625,
+        "min": 54.560546875,
+        "max": 93.78515625
+      },
+      "actor_perf_cpu_memory_used_gb": {
+        "first": 32.079776763916016,
+        "last": 32.09326934814453,
+        "mean": 31.98353449503581,
+        "min": 31.816463470458984,
+        "max": 32.24441146850586
+      },
+      "c2_frac_groups_with_nonzero_b_gain_std": {
+        "first": 0.0,
+        "last": 0.5,
+        "mean": 0.26666666666666666,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_frac_groups_where_b_gain_changes_ranking": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.13333333333333333,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_frac_all_same_answer_groups_with_b_gain_ranking": {
+        "first": 0.0,
+        "last": 0.5,
+        "mean": 0.23333333333333334,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_within_group_corr_answer_b_gain_mean": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": -0.06666666666666667,
+        "min": -1.0,
+        "max": 0.0
+      }
+    },
+    "markers": [
+      {
+        "pattern": "CUDA Error: out of memory",
+        "count": 5
+      },
+      {
+        "pattern": "Traceback",
+        "count": 4
+      },
+      {
+        "pattern": "RuntimeError",
+        "count": 4
+      }
+    ]
+  },
+  "qwen3vl8b_stage3_c2_zscore_pilot_trainonly_prompt4096_seed42.log": {
+    "summary": {
+      "steps_seen": 15,
+      "last_step": 15,
+      "training_global_step": {
+        "first": 1.0,
+        "last": 15.0,
+        "mean": 8.0,
+        "min": 1.0,
+        "max": 15.0
+      },
+      "critic_score_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.8666666666666667,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "critic_score_max": {
+        "first": 1.0,
+        "last": 1.2000000476837158,
+        "mean": 1.0133333534002305,
+        "min": 0.20000000298023224,
+        "max": 1.2000000476837158
+      },
+      "critic_score_min": {
+        "first": 1.0,
+        "last": 0.800000011920929,
+        "mean": 0.7200000047683716,
+        "min": -0.20000000298023224,
+        "max": 1.0
+      },
+      "critic_rewards_mean": {
+        "first": 1.0,
+        "last": 1.0,
+        "mean": 0.8666666666666667,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "actor_grad_norm": {
+        "first": 0.0,
+        "last": 0.06881310045719147,
+        "mean": 0.0296554380406936,
+        "min": 0.0,
+        "max": 0.07587333768606186
+      },
+      "actor_loss": {
+        "first": 0.0,
+        "last": -0.018871765583753586,
+        "mean": 0.007513586183389028,
+        "min": -0.20702850818634033,
+        "max": 0.2971653938293457
+      },
+      "response_length_mean": {
+        "first": 4151.5,
+        "last": 1517.5,
+        "mean": 3592.766666666667,
+        "min": 988.0,
+        "max": 12478.5
+      },
+      "response_length_max": {
+        "first": 6815.0,
+        "last": 1558.0,
+        "mean": 4520.333333333333,
+        "min": 1167.0,
+        "max": 16132.0
+      },
+      "response_length_min": {
+        "first": 1488.0,
+        "last": 1477.0,
+        "mean": 2665.2,
+        "min": 767.0,
+        "max": 8825.0
+      },
+      "response_length_clip_ratio": {
+        "first": 0.5,
+        "last": 0.5,
+        "mean": 0.5,
+        "min": 0.5,
+        "max": 0.5
+      },
+      "prompt_length_mean": {
+        "first": 185.0,
+        "last": 513.0,
+        "mean": 327.8666666666667,
+        "min": 159.0,
+        "max": 2082.0
+      },
+      "timing_s_gen": {
+        "first": 56.80831350997323,
+        "last": 14.706644868012518,
+        "mean": 37.259659861664595,
+        "min": 10.64731508801924,
+        "max": 126.89081427000929
+      },
+      "timing_s_adv": {
+        "first": 0.12860751303378493,
+        "last": 0.12449519202345982,
+        "mean": 0.1273650635421897,
+        "min": 0.12168287497479469,
+        "max": 0.13629110500914976
+      },
+      "timing_s_update_actor": {
+        "first": 6.361039990035351,
+        "last": 2.2061010770266876,
+        "mean": 6.467147175401139,
+        "min": 1.3200667159981094,
+        "max": 28.424426094978116
+      },
+      "timing_s_update_weights": {
+        "first": 26.677143783017527,
+        "last": 25.72287999902619,
+        "mean": 27.270986394533733,
+        "min": 25.423405651992653,
+        "max": 32.05782675999217
+      },
+      "timing_s_step": {
+        "first": 100.02432770800078,
+        "last": 43.76373727095779,
+        "mean": 73.7595743551928,
+        "min": 38.8725785369752,
+        "max": 194.7040637159953
+      },
+      "actor_perf_max_memory_allocated_gb": {
+        "first": 45.273006439208984,
+        "last": 69.77841520309448,
+        "mean": 64.43704446156819,
+        "min": 45.273006439208984,
+        "max": 69.77841520309448
+      },
+      "actor_perf_max_memory_reserved_gb": {
+        "first": 54.560546875,
+        "last": 93.78515625,
+        "mean": 85.215625,
+        "min": 54.560546875,
+        "max": 93.78515625
+      },
+      "actor_perf_cpu_memory_used_gb": {
+        "first": 31.904090881347656,
+        "last": 33.2972297668457,
+        "mean": 32.869554646809895,
+        "min": 31.904090881347656,
+        "max": 33.57044219970703
+      },
+      "c2_frac_groups_with_nonzero_b_gain_std": {
+        "first": 0.0,
+        "last": 0.5,
+        "mean": 0.26666666666666666,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_frac_groups_where_b_gain_changes_ranking": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": 0.13333333333333333,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_frac_all_same_answer_groups_with_b_gain_ranking": {
+        "first": 0.0,
+        "last": 0.5,
+        "mean": 0.23333333333333334,
+        "min": 0.0,
+        "max": 0.5
+      },
+      "c2_within_group_corr_answer_b_gain_mean": {
+        "first": 0.0,
+        "last": 0.0,
+        "mean": -0.06666666666666667,
+        "min": -1.0,
+        "max": 0.0
+      }
+    },
+    "markers": [
+      {
+        "pattern": "CUDA Error: out of memory",
+        "count": 5
+      },
+      {
+        "pattern": "Traceback",
+        "count": 4
+      },
+      {
+        "pattern": "RuntimeError",
+        "count": 4
+      }
+    ]
+  }
+}

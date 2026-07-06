@@ -1,0 +1,20 @@
+{
+  "num_records": 16,
+  "output_tokens_mean": 8018.875,
+  "output_tokens_min": 1251,
+  "output_tokens_p50": 6344.5,
+  "output_tokens_p90": 15986.0,
+  "output_tokens_max": 16384,
+  "starts_with_think_count": 0,
+  "template_prefilled_think_count": 16,
+  "combined_starts_with_think_count": 16,
+  "has_think_open_count": 16,
+  "has_think_close_count": 15,
+  "early_final_answer_count": 15,
+  "final_answer_before_think_close_count": 14,
+  "truncated_by_length_count": 1,
+  "finish_reason_counts": {
+    "stop": 15,
+    "length": 1
+  }
+}

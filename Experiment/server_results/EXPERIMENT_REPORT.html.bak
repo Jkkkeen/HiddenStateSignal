@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hidden-State 轨迹实验报告</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #bc8cff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+h1 { font-size: 2rem; margin-bottom: 0.5rem; color: var(--accent); }
+h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--purple); }
+p, li { color: var(--text-muted); margin-bottom: 0.5rem; }
+.subtitle { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 2rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin: 1rem 0;
+}
+th, td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+th { background: #1c2128; color: var(--text); font-weight: 600; }
+td { color: var(--text-muted); }
+tr:hover td { background: #1c2128; }
+.auroc-high { color: var(--green); font-weight: 600; }
+.auroc-mid { color: var(--yellow); font-weight: 600; }
+.auroc-fail { color: var(--red); font-weight: 600; }
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.stat-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  text-align: center;
+}
+.stat-box .number { font-size: 2rem; font-weight: bold; color: var(--accent); }
+.stat-box .label { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; }
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.tag-pass { background: #1a3a2a; color: var(--green); }
+.tag-marginal { background: #3a2a1a; color: var(--yellow); }
+.tag-fail { background: #3a1a1a; color: var(--red); }
+.insight {
+  border-left: 3px solid var(--accent);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  background: #1c2128;
+  border-radius: 0 6px 6px 0;
+}
+.insight p { color: var(--text); margin: 0; }
+code {
+  background: #1c2128;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: var(--accent);
+}
+.fig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+.fig-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.fig-item img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.fig-item .fig-caption {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+.progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+.progress-fill { height: 100%; border-radius: 3px; }
+.timeline {
+  position: relative;
+  padding-left: 2rem;
+  margin: 1rem 0;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 0.5rem;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.timeline-item {
+  position: relative;
+  margin-bottom: 1.5rem;
+}
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -1.75rem;
+  top: 0.5rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+</style>
+</head>
+<body>
+
+<h1>Hidden-State 语义轨迹实验报告</h1>
+<p class="subtitle">Chunk 级语义轨迹诊断：用 hidden state 的几何动态区分 LLM 推理正误<br>
+数据：1117 题 / 8936 条 rollout / Layer 24 & 36（短 CoT, Qwen3-VL-Instruct）+ Long-CoT 验证 (Qwen3-VL-Thinking) | 更新：2026-06-12</p>
+
+<!-- ===== 摘要 ===== -->
+<h2>总览</h2>
+
+<div class="summary-grid">
+  <div class="stat-box">
+    <div class="number">0.7211</div>
+    <div class="label">最强单特征 AUROC<br>实验 E: d_late_mean (L36)</div>
+  </div>
+  <div class="stat-box">
+    <div class="number">0.6925</div>
+    <div class="label">最强 ER 动态 AUROC<br>实验 A: erv_adj_late_min (L36)</div>
+  </div>
+  <div class="stat-box">
+    <div class="number">0.5798</div>
+    <div class="label">最强角度 AUROC<br>实验 D: cos_mean (L36 chunk3)</div>
+  </div>
+  <div class="stat-box">
+    <div class="number">-0.47</div>
+    <div class="label">跨 rollout ER vs 正确率<br>实验 B: 后期相关 (L24)</div>
+  </div>
+</div>
+
+<div class="insight">
+  <p><strong>核心发现：</strong>正确 rollout 在后期 hidden-state 空间中收敛（位移小、ER 低、方向平滑）。最强信号不是轨迹总长度 (path_length)，而是<em>后期每步位移的大小</em> (d_late_mean)——"推理结束前是否还在大幅移动"。</p>
+</div>
+
+<!-- ===== 全局排名 ===== -->
+<h2>信号强度总排名</h2>
+
+<table>
+<tr>
+  <th>#</th><th>实验</th><th>特征</th><th>层</th><th>AUROC</th><th>95% CI</th><th>判定</th><th>含义</th>
+</tr>
+<tr><td>1</td><td>E: 路径动态</td><td>d_late_mean (-)</td><td>36</td><td class="auroc-high">0.7211</td><td>[0.7027, 0.7392]</td><td><span class="tag tag-pass">PASS</span></td><td>后期位移小 → 正确</td></tr>
+<tr><td>2</td><td>E: 路径动态</td><td>d_ratio_late_early (-)</td><td>36</td><td class="auroc-high">0.7167</td><td>[0.6991, 0.7345]</td><td><span class="tag tag-pass">PASS</span></td><td>轨迹减速 → 正确</td></tr>
+<tr><td>3</td><td>组合</td><td>path + erv36_hist</td><td>36</td><td class="auroc-high">0.7153</td><td>[0.6970, 0.7339]</td><td><span class="tag tag-pass">PASS</span></td><td>组合几乎无增益</td></tr>
+<tr><td>4</td><td>E: 路径动态</td><td>d_hist_late_min (-)</td><td>36</td><td class="auroc-high">0.7116</td><td>[0.6918, 0.7305]</td><td><span class="tag tag-pass">PASS</span></td><td>后期低于历史均值 → 正确</td></tr>
+<tr><td>5</td><td>M3: 路径长度</td><td>path_length (-)</td><td>36</td><td class="auroc-high">0.7109</td><td>[0.6923, 0.7284]</td><td><span class="tag tag-pass">PASS</span></td><td>总路径短 → 正确</td></tr>
+<tr><td>6</td><td>E: 路径动态</td><td>pv_late_max (-)</td><td>36</td><td class="auroc-high">0.7021</td><td>[0.6824, 0.7213]</td><td><span class="tag tag-pass">PASS</span></td><td>后期无加速突变 → 正确</td></tr>
+<tr><td>7</td><td>A: ER 动态</td><td>erv_adj_late_min</td><td>36</td><td class="auroc-high">0.6925</td><td>[0.6763, 0.7106]</td><td><span class="tag tag-pass">PASS</span></td><td>后期 ER 不下降 → 错误</td></tr>
+<tr><td>8</td><td>A: ER 动态</td><td>erv_hist_late_min</td><td>24</td><td class="auroc-high">0.6903</td><td>[0.6725, 0.7081]</td><td><span class="tag tag-pass">PASS</span></td><td>同上 (historical baseline)</td></tr>
+<tr><td>9</td><td>M1: TaT</td><td>tat_ang (-)</td><td>全层</td><td class="auroc-mid">0.6773</td><td>[0.6594, 0.6946]</td><td><span class="tag tag-pass">PASS</span></td><td>全层串联角度复杂度</td></tr>
+<tr><td>10</td><td>A: ER 动态</td><td>era_adj_late_min</td><td>36</td><td class="auroc-mid">0.6767</td><td>[0.6568, 0.6948]</td><td><span class="tag tag-pass">PASS</span></td><td>ER 加速度下限</td></tr>
+<tr><td>11</td><td>A: 原始 ER</td><td>ER (-) chunk2-3</td><td>36</td><td class="auroc-mid">0.6172</td><td>[0.5955, 0.6388]</td><td><span class="tag tag-pass">PASS</span></td><td>后期 ER 低 → 正确</td></tr>
+<tr><td>12</td><td>M0: Z-score</td><td>Z_late_std (-)</td><td>—</td><td class="auroc-mid">0.5913</td><td>[0.5755, 0.6071]</td><td><span class="tag tag-pass">PASS</span></td><td>后期 Z 波动小 → 正确</td></tr>
+<tr><td>13</td><td>D: 角动态</td><td>cos_min (+)</td><td>24</td><td class="auroc-mid">0.5853</td><td>[0.5623, 0.6067]</td><td><span class="tag tag-pass">PASS</span></td><td>无极端方向反转 → 正确</td></tr>
+<tr><td>14</td><td>D: 角动态</td><td>cos_mean (+)</td><td>36</td><td class="auroc-mid">0.5798</td><td>[0.5585, 0.6011]</td><td><span class="tag tag-pass">PASS</span></td><td>方向更平滑 → 正确</td></tr>
+</table>
+
+<!-- ===== 实验 A ===== -->
+<h2>实验 A：单条 Rollout 局部 ER + 动态 (ERV/ERA)</h2>
+
+<div class="card">
+<h3>方法</h3>
+<p><strong>衡量对象：</strong>每个 chunk 内 token-level hidden states 的 Effective Rank（SVD 熵），及其跨 chunk 的速度 (ERV) 和加速度 (ERA)。</p>
+<p><strong>公式：</strong><code>ER(H) = exp(-Σ p_i log p_i)</code>，其中 <code>p_i = σ_i / Σσ_j</code></p>
+<p><strong>数据：</strong>需要 token-level hidden states（在线计算，不保存原始 HS）</p>
+</div>
+
+<div class="card">
+<h3>结果：原始 ER</h3>
+<table>
+<tr><th>层</th><th>Chunk</th><th>方向</th><th>AUROC</th><th>95% CI</th></tr>
+<tr><td>36</td><td>0</td><td>+ER（高→对）</td><td>0.5216</td><td>[0.5054, 0.5379]</td></tr>
+<tr><td>36</td><td>1</td><td>-ER（低→对）</td><td>0.5809</td><td>[0.5641, 0.5975]</td></tr>
+<tr><td>36</td><td>2</td><td>-ER（低→对）</td><td>0.6156</td><td>[0.5962, 0.6358]</td></tr>
+<tr><td>36</td><td>3</td><td>-ER（低→对）</td><td>0.6172</td><td>[0.5955, 0.6388]</td></tr>
+</table>
+<p>早期高 ER 稍微有利（探索），中后期低 ER 有利（收敛）。</p>
+</div>
+
+<div class="card">
+<h3>结果：ER 动态 (ERV/ERA)</h3>
+<table>
+<tr><th>层</th><th>特征</th><th>AUROC</th><th>95% CI</th></tr>
+<tr><td>36</td><td>erv_adj_late_min</td><td class="auroc-high">0.6925</td><td>[0.6763, 0.7106]</td></tr>
+<tr><td>24</td><td>erv_hist_late_min</td><td class="auroc-high">0.6903</td><td>[0.6725, 0.7081]</td></tr>
+<tr><td>36</td><td>erv_hist_late_min</td><td class="auroc-high">0.6878</td><td>[0.6703, 0.7062]</td></tr>
+<tr><td>36</td><td>era_adj_late_min</td><td class="auroc-mid">0.6767</td><td>[0.6568, 0.6948]</td></tr>
+</table>
+<div class="insight"><p><strong>关键发现：</strong>ER 的时间变化模式（速度/加速度）远强于 ER 绝对值。erv_late_min 捕捉的是"后期 ER 是否在持续下降"——正确 rollout 的语义空间在后期收缩，错误的则停滞或扩张。</p></div>
+</div>
+
+<div class="fig-grid">
+  <div class="fig-item">
+    <img src="er_local_results/figures/A1_correct_vs_incorrect_er_curve_layer36.png" alt="A1">
+    <div class="fig-caption">图 A1：正确 vs 错误 rollout 的 ER 曲线 (Layer 36)</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_local_results/figures/A4_within_question_auroc_by_chunk.png" alt="A4">
+    <div class="fig-caption">图 A4：Within-question AUROC 随 chunk 位置变化</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_local_dynamics_results/figures/ERD_erv_adj_curve.png" alt="ERV adj">
+    <div class="fig-caption">图 ERD：ERV (adjacent) 正确 vs 错误曲线</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_local_dynamics_results/figures/ERD_era_adj_curve.png" alt="ERA adj">
+    <div class="fig-caption">图 ERD：ERA (adjacent) 正确 vs 错误曲线</div>
+  </div>
+</div>
+
+<!-- ===== 实验 B ===== -->
+<h2>实验 B：跨 Rollout ER（题目级语义共识）</h2>
+
+<div class="card">
+<h3>方法</h3>
+<p><strong>衡量对象：</strong>固定题目和 chunk 位置，把同题所有 rollout 的 chunk 表征堆叠为矩阵，计算 group-level ER。</p>
+<p><strong>公式：</strong><code>ER_group(q,k) = ER([g(q,1,k); g(q,2,k); ...; g(q,N,k)])</code></p>
+<p><strong>含义：</strong>ER_group 高 = 同题 rollout 语义分散，分歧大；ER_group 低 = rollout 趋近相同语义区域，共识强。</p>
+<p><strong>数据：</strong>使用现有 chunk-mean hidden states，无需新 forward。</p>
+</div>
+
+<div class="card">
+<h3>结果：Spearman 相关</h3>
+<table>
+<tr><th>阶段</th><th>层</th><th>目标</th><th>Spearman ρ</th><th>p 值</th></tr>
+<tr><td>后期</td><td>24</td><td>题目正确率</td><td class="auroc-high">-0.4737</td><td>1.05e-51</td></tr>
+<tr><td>后期</td><td>36</td><td>题目正确率</td><td class="auroc-high">-0.4636</td><td>2.53e-49</td></tr>
+<tr><td>后期</td><td>24</td><td>答案熵</td><td>+0.3597</td><td>5.63e-29</td></tr>
+<tr><td>后期</td><td>24</td><td>多数票置信度</td><td>-0.3373</td><td>1.81e-25</td></tr>
+<tr><td>中期</td><td>24</td><td>题目正确率</td><td>-0.3294</td><td>3.51e-26</td></tr>
+<tr><td>早期</td><td>24</td><td>题目正确率</td><td>-0.1309</td><td>1.13e-05</td></tr>
+</table>
+<div class="insight"><p><strong>关键发现：</strong>后期 cross-rollout ER 与题目正确率强负相关 (ρ = -0.47)。rollout 在语义上收敛的题目正确率更高。这解释了 ST-BoN / majority vote 为何有效：当 ER_group 低时，存在有意义的语义中心可以用来选择。</p></div>
+</div>
+
+<div class="fig-grid">
+  <div class="fig-item">
+    <img src="er_results/figures/B1_er_group_by_accuracy_layer36.png" alt="B1">
+    <div class="fig-caption">图 B1：按正确率分组的 ER_group 曲线 (Layer 36)</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_results/figures/B3_er_vs_question_accuracy.png" alt="B3">
+    <div class="fig-caption">图 B3：ER_group vs 题目正确率散点图</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_results/figures/B4_er_vs_answer_entropy.png" alt="B4">
+    <div class="fig-caption">图 B4：ER_group vs 答案熵</div>
+  </div>
+  <div class="fig-item">
+    <img src="er_results/figures/B5_er_group_heatmap_layer36.png" alt="B5">
+    <div class="fig-caption">图 B5：ER_group 热力图 (Layer 36)</div>
+  </div>
+</div>
+
+<!-- ===== 实验 D ===== -->
+<h2>实验 D：局部 Chunk 角动态</h2>
+
+<div class="card">
+<h3>方法</h3>
+<p><strong>衡量对象：</strong>每个 chunk 内，对 micro-window (w=8) 做 pooling 后计算相邻 displacement 的夹角。衡量方向稳定性 vs 震荡。</p>
+<p><strong>公式：</strong><code>cos_mean = mean(cos(v_j, v_{j-1}))</code>，其中 v_j 是相邻 micro-window 的位移向量</p>
+<p><strong>数据：</strong>需要 token-level hidden states</p>
+</div>
+
+<div class="card">
+<h3>结果：Primary AUROC（Top-10）</h3>
+<table>
+<tr><th>层</th><th>Chunk</th><th>特征</th><th>AUROC</th><th>95% CI</th></tr>
+<tr><td>36</td><td>3</td><td>cos_mean (+)</td><td>0.5798</td><td>[0.5585, 0.6011]</td></tr>
+<tr><td>24</td><td>3</td><td>cos_p10 (+)</td><td>0.5636</td><td>[0.5414, 0.5858]</td></tr>
+<tr><td>36</td><td>2</td><td>cos_mean (+)</td><td>0.5635</td><td>[0.5433, 0.5826]</td></tr>
+<tr><td>24</td><td>3</td><td>cos_mean (+)</td><td>0.5557</td><td>[0.5332, 0.5791]</td></tr>
+<tr><td>24</td><td>3</td><td>av_cos_mean (+)</td><td>0.5514</td><td>[0.5291, 0.5748]</td></tr>
+</table>
+<p><strong>Secondary 最强：</strong>L24 chunk3 cos_min (+) = 0.5853 [0.5623, 0.6067]</p>
+<p><strong>Selection Bias 检查：</strong>通过。Common-question AUROC 与 native AUROC 差异 < 0.0003。</p>
+<div class="insight"><p><strong>关键发现：</strong>信号从 chunk 0 (~0.50) 单调递增到 chunk 3 (~0.58)。正确 rollout 后期方向更平滑（cos_mean 更高），错误 rollout 后期出现更多方向反转。信号真实但较弱——方向指标弱于位移量级指标。</p></div>
+</div>
+
+<div class="fig-grid">
+  <div class="fig-item">
+    <img src="angular_results/figures/D_cos_mean_curve.png" alt="D cos_mean">
+    <div class="fig-caption">图 D：cos_mean 正确 vs 错误曲线</div>
+  </div>
+  <div class="fig-item">
+    <img src="angular_results/figures/D_spike_rate_90_curve.png" alt="D spike">
+    <div class="fig-caption">图 D：spike_rate_90 正确 vs 错误曲线</div>
+  </div>
+  <div class="fig-item">
+    <img src="angular_results/figures/D_primary_auc_by_chunk.png" alt="D AUROC">
+    <div class="fig-caption">图 D：Primary AUROC 随 chunk 变化</div>
+  </div>
+  <div class="fig-item">
+    <img src="angular_results/figures/D4_er_x_cos_mean_scatter.png" alt="D4">
+    <div class="fig-caption">图 D4：ER × cos_mean 二维散点（按正误着色）</div>
+  </div>
+</div>
+
+<!-- ===== 实验 E ===== -->
+<h2>实验 E：路径速度与加速度</h2>
+
+<div class="card">
+<h3>方法</h3>
+<p><strong>衡量对象：</strong>将 path_length 拆解为逐 chunk 位移序列 d_k，分析其时间模式。</p>
+<p><strong>公式：</strong><code>d_k = ||h_{k+1} - h_k||</code>，<code>pv_k = d_k - d_{k-1}</code></p>
+<p><strong>数据：</strong>使用现有 chunk-mean hidden states，无需新 forward</p>
+</div>
+
+<div class="card">
+<h3>结果：Primary 指标</h3>
+<table>
+<tr><th>层</th><th>特征</th><th>方向</th><th>AUROC</th><th>95% CI</th><th>vs path_length</th></tr>
+<tr><td>36</td><td>d_late_mean</td><td>低→对</td><td class="auroc-high">0.7211</td><td>[0.7027, 0.7392]</td><td>+0.010</td></tr>
+<tr><td>36</td><td>d_ratio_late_early</td><td>低→对</td><td class="auroc-high">0.7167</td><td>[0.6991, 0.7345]</td><td>+0.006</td></tr>
+<tr><td>36</td><td>d_hist_late_min</td><td>低→对</td><td class="auroc-high">0.7116</td><td>[0.6918, 0.7305]</td><td>+0.001</td></tr>
+<tr><td>36</td><td>pv_late_max</td><td>低→对</td><td class="auroc-high">0.7021</td><td>[0.6824, 0.7213]</td><td>-0.009</td></tr>
+<tr><td>36</td><td>path_length (参考)</td><td>低→对</td><td>0.7109</td><td>[0.6923, 0.7284]</td><td>—</td></tr>
+</table>
+<div class="insight"><p><strong>关键发现：</strong>d_late_mean (0.7211) 略超 path_length (0.7109)，但提升仅 +0.01。说明 path_length 的信号主要来自后期 chunk 的位移贡献——总路径长 ≈ 后期位移大。时间模式的增量信息有限。</p></div>
+</div>
+
+<div class="card">
+<h3>逐 Chunk AUROC（用 -d_k 作为 score）</h3>
+<table>
+<tr><th>层</th><th>Step 0</th><th>Step 1</th><th>Step 2</th><th>Step 3</th></tr>
+<tr><td>36</td><td>0.4717</td><td>0.4155</td><td>0.4350</td><td class="auroc-mid">0.5495</td></tr>
+<tr><td>24</td><td>0.4127</td><td>0.4031</td><td>0.4153</td><td>0.5075</td></tr>
+</table>
+<p>注：AUROC < 0.5 表示该 chunk 上 d 越大反而越对（早期探索有利）。只有 step 3 的 -d 有正向区分力。</p>
+</div>
+
+<div class="fig-grid">
+  <div class="fig-item">
+    <img src="path_dynamics_results/figures/E1_d_curve.png" alt="E1">
+    <div class="fig-caption">图 E1：d_k 正确 vs 错误曲线</div>
+  </div>
+  <div class="fig-item">
+    <img src="path_dynamics_results/figures/E2_pv_curve.png" alt="E2">
+    <div class="fig-caption">图 E2：pv_k（加速度）正确 vs 错误曲线</div>
+  </div>
+  <div class="fig-item">
+    <img src="path_dynamics_results/figures/E3_auroc_by_chunk.png" alt="E3">
+    <div class="fig-caption">图 E3：逐 chunk AUROC</div>
+  </div>
+  <div class="fig-item">
+    <img src="path_dynamics_results/figures/E4_path_dynamics_vs_erv.png" alt="E4">
+    <div class="fig-caption">图 E4：Path dynamics vs ERV 散点</div>
+  </div>
+</div>
+
+<!-- ===== 组合实验 ===== -->
+<h2>组合实验：Path Length + ERV</h2>
+
+<div class="card">
+<h3>相关性</h3>
+<table>
+<tr><th>x</th><th>y</th><th>范围</th><th>Spearman ρ</th></tr>
+<tr><td>path_score</td><td>erv36_adj_late_min</td><td>全局</td><td>0.6582</td></tr>
+<tr><td>path_score</td><td>erv36_adj_late_min</td><td>题内均值</td><td>0.3921</td></tr>
+<tr><td>path_score</td><td>erv36_hist_late_min</td><td>全局</td><td>0.6935</td></tr>
+<tr><td>path_score</td><td>erv36_hist_late_min</td><td>题内均值</td><td>0.4167</td></tr>
+</table>
+
+<h3>组合 AUROC</h3>
+<table>
+<tr><th>Score</th><th>AUROC</th><th>vs path 单独</th></tr>
+<tr><td>combo_path_erv36_hist</td><td>0.7153</td><td>+0.004</td></tr>
+<tr><td>combo_path_erv36_adj</td><td>0.7152</td><td>+0.004</td></tr>
+<tr><td>path_score 单独</td><td>0.7109</td><td>—</td></tr>
+<tr><td>erv36_adj_late_min 单独</td><td>0.6925</td><td>—</td></tr>
+</table>
+<div class="insight"><p><strong>结论：</strong>尽管题内相关仅 ~0.4，组合后 AUROC 提升仅 +0.004。path_length 已经吃掉了 ERV 中与正确性相关的方差。两者在预测力上高度冗余。</p></div>
+</div>
+
+<div class="fig-grid">
+  <div class="fig-item">
+    <img src="combo_results/figures/path_score_vs_erv36_late_min.png" alt="combo">
+    <div class="fig-caption">图：path_score vs erv36_late_min 散点</div>
+  </div>
+</div>
+
+<!-- ===== Method 0/1/3 ===== -->
+<h2>附录：Method 0/1/3 全部结果（CHUNK_TRAJECTORY_PLAN）</h2>
+
+<div class="card">
+<table>
+<tr><th>指标</th><th>AUROC</th><th>判定</th><th>说明</th></tr>
+<tr><td>M3_L36_path_length</td><td class="auroc-high">0.7109</td><td><span class="tag tag-pass">PASS</span></td><td>固定 L36，cross-chunk 总路径</td></tr>
+<tr><td>M3_L24_path_length</td><td class="auroc-high">0.7008</td><td><span class="tag tag-pass">PASS</span></td><td>同上，L24</td></tr>
+<tr><td>M1_tat_ang</td><td class="auroc-mid">0.6773</td><td><span class="tag tag-pass">PASS</span></td><td>全层串联轨迹角度</td></tr>
+<tr><td>M3_L24_curvature_ratio</td><td class="auroc-mid">0.6054</td><td><span class="tag tag-pass">PASS</span></td><td>路径曲率比</td></tr>
+<tr><td>M3_L36_curvature_ratio</td><td class="auroc-mid">0.5956</td><td><span class="tag tag-pass">PASS</span></td><td>路径曲率比</td></tr>
+<tr><td>M0_Z_late_std</td><td class="auroc-mid">0.5913</td><td><span class="tag tag-pass">PASS</span></td><td>Z-score 后期波动</td></tr>
+<tr><td>M1_tat_a_std</td><td>0.5820</td><td><span class="tag tag-pass">PASS</span></td><td>全层串联角度标准差</td></tr>
+<tr><td>M3_L36_end_drift</td><td>0.5665</td><td><span class="tag tag-pass">PASS</span></td><td>末尾漂移</td></tr>
+<tr><td>M1_tat_curvature_ratio</td><td>0.5528</td><td><span class="tag tag-pass">PASS</span></td><td>全层串联曲率比</td></tr>
+<tr><td>M3_L24_dir_consistency</td><td>0.5368</td><td><span class="tag tag-marginal">MARGINAL</span></td><td>方向一致性</td></tr>
+<tr><td>M0_Z_mean_abs</td><td>0.5028</td><td><span class="tag tag-marginal">MARGINAL</span></td><td>Z-score 绝对均值</td></tr>
+<tr><td>M3 late_curvature</td><td>0.5000</td><td><span class="tag tag-fail">FAIL</span></td><td>后期曲率（无信号）</td></tr>
+<tr><td>M3_L36_dir_consistency</td><td>0.4774</td><td><span class="tag tag-fail">FAIL</span></td><td>方向一致性 L36</td></tr>
+<tr><td>M0_Z_max / Z_late_mean</td><td>&lt;0.50</td><td><span class="tag tag-fail">FAIL</span></td><td>Z-score 峰值/最终值</td></tr>
+<tr><td>M3 mag / ang / coe_c (opposite)</td><td>~0.70</td><td><span class="tag tag-pass">PASS (反向)</span></td><td>原始方向错误，反向后有信号</td></tr>
+</table>
+</div>
+
+<!-- ===== 实验 G ===== -->
+<h2>实验 G：跨 Chunk 宏观角动态（Negative）</h2>
+
+<div class="card">
+<h3>方法</h3>
+<p><strong>衡量对象：</strong>把整条 response 按中等粒度 (w token) 池化成轨迹点，计算相邻 cross-point 位移之间的转角。补上实验 E 缺失的"方向"分量（E 只用了位移大小）。</p>
+<p><strong>公式：</strong><code>gcos_j = cos(D_j, D_{j-1})</code>，其中 <code>D_j = p_{j+1} - p_j</code>，p 为中等粒度池化点</p>
+<p><strong>Sweep：</strong>粒度 w ∈ {32, 64, 128} × 表征 ∈ {mean, last} × 层 ∈ {24, 36}，共 12 组。需重新 forward。</p>
+<p><strong>预注册 Primary：</strong><code>gcos_mean</code>、<code>gcos_late_mean</code>、<code>gcos_p10</code>、<code>gtheta_late_mean</code></p>
+</div>
+
+<div class="card">
+<h3>结果：全量 1117 题</h3>
+<table>
+<tr><th>类别</th><th>层/窗/池</th><th>特征</th><th>AUROC</th><th>说明</th></tr>
+<tr><td>Primary 最强</td><td>24 / 128 / mean</td><td>gcos_p10 (+)</td><td class="auroc-mid">0.6115</td><td>唯一勉强超过实验 D 的 primary</td></tr>
+<tr><td>Primary 主指标</td><td>—</td><td>gcos_mean / gcos_late_mean</td><td class="auroc-fail">~0.53</td><td>预注册主指标，基本无信号</td></tr>
+<tr><td>探索最强</td><td>36 / 32 / mean</td><td>gstep_late_mean</td><td class="auroc-mid">0.6499</td><td>但这是<em>位移幅度</em>，不是方向</td></tr>
+<tr><td>探索次强</td><td>—</td><td>gcos_min</td><td class="auroc-mid">0.62-0.63</td><td>方向信号藏在极端事件，不在均值</td></tr>
+</table>
+<div class="insight"><p><strong>结论（Negative）：</strong>宏观尺度上的<em>平均方向一致性</em>（gcos_mean / gcos_late_mean）几乎不区分对错（~0.53）。唯一非随机的探索指标 <code>gstep</code> (0.65) 本质是位移幅度——在更细粒度复刻了实验 E 的 path，没超过 256-chunk 的 path (0.71)。两个意外：(1) 方向信号若存在，只在极端分位 (gcos_min/p10) 而非均值；(2) <strong>mean &gt; last</strong>，与"last 是因果快照所以更好"的预期相反。再次印证全局 pattern：<strong>量级 &gt;&gt; 方向</strong>。</p></div>
+</div>
+
+<!-- ===== Long-CoT ===== -->
+<h2>Long-CoT 验证：所有指标集体失效（Negative，重要）</h2>
+
+<div class="card">
+<h3>设置</h3>
+<p><strong>动机：</strong>本报告全部结果来自 Instruct 模型、response ≤1536 的<em>短 CoT</em>。ER 方法论的核心立论是"全局标量在 long-CoT 下失效"——但该前提从未在真正 long 的数据上压力测试过。</p>
+<p><strong>模型：</strong><code>Qwen3-VL-8B-Thinking</code>（同尺寸，只换 Instruct→Thinking）　<strong>数据：</strong>同批 MathVerse mixed MCQ</p>
+<p><strong>规模：</strong>smoke 500 题 → 206 个 mixed-correctness 题进入 within-question AUROC　<strong>think 长度：</strong>mean 3816 / p90 ~9000 token（短 CoT 上限的 6 倍）　<strong>截断率：</strong>4.75%　<strong>平均 chunk：</strong>15.4（短 CoT ~4）</p>
+</div>
+
+<div class="card">
+<h3>结果：短 CoT vs Long-CoT 对照（仅比 AUROC，norm 漂移使 raw 值不可比）</h3>
+<table>
+<tr><th>指标</th><th>短 CoT (Instruct, 1117题)</th><th>Long-CoT (Thinking, 206题)</th><th>结果</th></tr>
+<tr><td>d_late_mean</td><td class="auroc-high">0.72</td><td class="auroc-fail">0.52</td><td>失效</td></tr>
+<tr><td>d_mean</td><td>0.64</td><td class="auroc-fail">0.53</td><td>失效</td></tr>
+<tr><td>path_length</td><td class="auroc-high">0.71 (+方向)</td><td class="auroc-mid">0.58 (<strong>-方向</strong>)</td><td><strong>符号翻转</strong></td></tr>
+<tr><td>G: gcos_p10 / gcos_min</td><td>~0.53</td><td class="auroc-fail">~0.56</td><td>仍弱</td></tr>
+<tr><td>D: cos_mean</td><td>0.58</td><td class="auroc-fail">0.50</td><td>失效</td></tr>
+</table>
+<div class="insight"><p><strong>核心结论（Negative）：</strong>短 CoT 上有效的<em>所有</em> hidden-state trajectory 指标，在真正的 long-CoT 上集体回落到 0.50–0.58。其中 <code>path_length</code> 不仅判别力下降，还<strong>符号翻转</strong>（短 CoT "短路径=对"，long-CoT "长路径=对"），退化为 think 长度的代理。位置归一化的 d_late_mean、动态的 ERV 也未能幸免。</p></div>
+</div>
+
+<div class="card">
+<h3>长度分桶：path_length 已退化为长度计</h3>
+<table>
+<tr><th>层</th><th>特征</th><th>&lt;2k</th><th>2-4k</th><th>4-8k</th><th>8k+</th></tr>
+<tr><td>24</td><td>path_length</td><td>0.62 (-)</td><td>0.54</td><td>0.52</td><td>0.62 (-)</td></tr>
+<tr><td>24</td><td>d_mean</td><td>0.52</td><td>0.53</td><td>0.51</td><td>0.57</td></tr>
+<tr><td>24</td><td>d_late_mean</td><td>0.53</td><td>0.52</td><td>0.54</td><td>0.51</td></tr>
+</table>
+<p>每桶 56-77 题。path_length 桶内仍为 <code>-方向</code>（"长=对"），方向被题目难度驱动的长度主导，已非"轨迹稳定性"信号。</p>
+<div class="insight"><p><strong>解读：</strong>short CoT 的 0.71 很可能强烈依赖"短 response ≈ 简单题 ≈ 容易对"这条<em>长度捷径</em>。一旦换到 long-CoT，长度方差爆炸 + 大量 rethinking 让轨迹普遍变乱，几何区分度被抹平。<strong>rethinking 假设也未成立</strong>：极端角度指标 (gcos_min/p10) 没有因为转折事件而复活（100题看似 0.62，扩到 206题回落 0.56）。这质疑了短 CoT 发现向 long-CoT 的泛化性。</p></div>
+</div>
+
+<div class="card">
+<h3>待补对照（确证用）</h3>
+<p>下结论前需排除 artifact：直接用 <code>think_token_count</code> 当 score 算 within-question AUROC。若其本身 ~0.58，则<strong>确证</strong> path_length = 长度代理、几何成分为零。该对照尚未跑，是这个 negative 结论的最后一块拼图。</p>
+</div>
+
+<!-- ===== 综合分析 ===== -->
+<h2>综合分析</h2>
+
+<div class="card">
+<h3>信号层级</h3>
+<div class="timeline">
+  <div class="timeline-item">
+    <strong>位移量级（最强，AUROC 0.72）</strong>
+    <p>后期 chunk 位移量。正确 rollout 停止移动，错误的继续游荡。</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:72%; background:var(--green)"></div></div>
+  </div>
+  <div class="timeline-item">
+    <strong>ER 动态（强，AUROC 0.69）</strong>
+    <p>语义维度是否随时间收缩。与位移量级高度冗余（组合仅 +0.004）。</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:69%; background:var(--green)"></div></div>
+  </div>
+  <div class="timeline-item">
+    <strong>原始 ER（中等，AUROC 0.62）</strong>
+    <p>静态语义宽度。早期略高（探索），后期低（收敛）。</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:62%; background:var(--yellow)"></div></div>
+  </div>
+  <div class="timeline-item">
+    <strong>角动态（较弱，AUROC 0.58）</strong>
+    <p>chunk 内方向一致性。正确 rollout 转向更少。</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:58%; background:var(--yellow)"></div></div>
+  </div>
+  <div class="timeline-item">
+    <strong>跨 rollout ER（题目级，ρ = -0.47）</strong>
+    <p>非单条 rollout 评分，而是解释题目难度和共识选择何时有效。</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:47%; background:var(--purple)"></div></div>
+  </div>
+</div>
+</div>
+
+<div class="card">
+<h3>跨实验一致性 Pattern</h3>
+<table>
+<tr><th>Pattern</th><th>证据</th></tr>
+<tr><td>后期信号 > 早期信号</td><td>所有指标随 chunk 位置单调递增（D: 0.50→0.58; A-ER: 0.52→0.62）</td></tr>
+<tr><td>动态 > 静态</td><td>ERV (0.69) >> raw ER (0.62); d_late_mean (0.72) > path_length (0.71)</td></tr>
+<tr><td>量级 > 方向</td><td>位移指标 (0.71-0.72) >> 角度指标 (0.58)</td></tr>
+<tr><td>Layer 36 > Layer 24</td><td>在 path、ER、angular 上一致（最后层更接近输出决策）</td></tr>
+<tr><td>收敛 = 正确</td><td>后期位移小 + 后期 ER 低 + 方向平滑 → 全部预测正确</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>物理图像</h3>
+<p style="color: var(--text); line-height: 1.8;">
+正确的推理轨迹在 hidden-state 空间中呈现一致的模式：<strong>早期语义探索 → 后期收敛</strong>。
+模型在前期"探索"不同的语义方向（ER 稍高、位移适中），然后"落定"到一个稳定区域（位移小、ER 收缩、方向平滑）。
+</p>
+<p style="color: var(--text); line-height: 1.8; margin-top: 0.75rem;">
+错误的推理轨迹未能收敛：它们在 hidden-state 空间中继续大幅移动，维持高语义维度，后期方向不稳定。
+模型在本该"得出结论"时仍在"搜索"。
+</p>
+</div>
+
+<!-- ===== 下一步 ===== -->
+<h2>下一步计划</h2>
+
+<div class="card">
+<ol style="padding-left: 1.5rem;">
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>d_late_mean + angular 组合测试</strong> — 验证 cos_mean（方向）是否能为 d_late_mean（量级）提供增量。若组合 AUROC 到 0.73+，多维 u_k 的叙事成立。
+</li>
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>实验 C（快速近似版）</strong> — 用 per-chunk cos_mean 的 cumulative mean 作为近似 PAD，完成论文实验矩阵。
+</li>
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>构造 u_k</strong> — 在特征向量 [d_late_mean, erv_late_min, cos_mean, position] 上训练轻量模型预测 final correctness，评估 within-question AUROC。
+</li>
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>长 CoT 验证</strong> — <span class="tag tag-fail">已完成 (Negative)</span> 在 Qwen3-VL-Thinking 长 CoT (think mean ~3.8K, p90 ~9K tokens) 上重测：d_late_mean / path_length / ERV / 角度指标全部回落至 0.50–0.58，path_length 符号翻转退化为长度代理。短 CoT 的轨迹信号未能迁移到 long-CoT。详见上文 Long-CoT 章节。
+</li>
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>think-length 对照（待补）</strong> — 直接用 think_token_count 当 score 算 within-question AUROC，确证 path_length 在 long-CoT 下是否纯为长度代理。
+</li>
+<li style="margin-bottom: 1rem; color: var(--text);">
+  <strong>实验 F：训练 step 动态</strong> — 管线已通 (step0 smoke)，待多 checkpoint 后观察指标判别力随训练是否稳定，作为 RL reward 前置检查。
+</li>
+</ol>
+</div>
+
+</body>
+</html>

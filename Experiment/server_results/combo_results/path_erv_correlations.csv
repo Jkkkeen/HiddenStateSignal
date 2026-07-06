@@ -1,0 +1,7 @@
+x,y,scope,rho,n
+path_score,erv36_adj_late_min,global,0.6581683216345469,8167
+path_score,erv36_adj_late_min,within_question_mean,0.3921495327102804,1070
+path_score,erv36_hist_late_min,global,0.6935228116272484,8167
+path_score,erv36_hist_late_min,within_question_mean,0.41671117044948824,1070
+path_score,erv24_hist_late_min,global,0.6983008504829573,8167
+path_score,erv24_hist_late_min,within_question_mean,0.40416110369381403,1070

@@ -1,0 +1,15 @@
+*** Begin Patch
+*** Update File: /data2/hjk/projects/verl/verl/experimental/reward_loop/reward_loop.py
+@@
+-        outputs_flat = [item for sublist in outputs for item in sublist]
++        outputs_flat = [item for sublist in outputs for item in sublist]
+         if pad_size > 0:
+             outputs_flat = outputs_flat[: len(data)]
++
++        postprocess_batch = getattr(self.reward_manager_cls, "postprocess_batch", None)
++        if postprocess_batch is not None:
++            outputs_flat = postprocess_batch(data, outputs_flat)
+ 
+         # compute rm score
+         scores = [item["reward_score"] for item in outputs_flat]
+*** End Patch

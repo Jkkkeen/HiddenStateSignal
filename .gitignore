@@ -1,0 +1,21 @@
+# Large data files
+*.parquet
+*.npz
+*.jsonl
+*.npy
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Office files
+*.pptx
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

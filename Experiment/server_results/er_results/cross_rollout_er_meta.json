@@ -1,0 +1,21 @@
+{
+  "input_glob": "chunklayer/h_gpu*.npz",
+  "input_files": [
+    "chunklayer/h_gpu0.npz",
+    "chunklayer/h_gpu1.npz",
+    "chunklayer/h_gpu2.npz",
+    "chunklayer/h_gpu3.npz",
+    "chunklayer/h_gpu4.npz",
+    "chunklayer/h_gpu5.npz",
+    "chunklayer/h_gpu6.npz",
+    "chunklayer/h_gpu7.npz"
+  ],
+  "layers": [
+    24,
+    36
+  ],
+  "min_rollouts": 4,
+  "questions": 1117,
+  "cross_er_rows": 9002,
+  "note": "Current version uses chunk-mean hidden states from h_chunk."
+}
