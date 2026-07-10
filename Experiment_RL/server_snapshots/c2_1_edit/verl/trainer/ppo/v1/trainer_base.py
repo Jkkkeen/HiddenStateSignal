@@ -1209,6 +1209,11 @@ class PPOTrainer(ABC):
         return backend in {"vllm", "vllm_prompt_logprobs", "deferred_vllm"}
 
     @staticmethod
+    def _c2_actor_option_gain_enabled() -> bool:
+        backend = os.getenv("OPTION_GAIN_BACKEND", "").strip().lower()
+        return backend in {"actor", "actor_forward", "hf_actor", "fsdp_actor"}
+
+    @staticmethod
     def _c2_to_list(value, length: int, default):
         if value is None:
             return [default for _ in range(length)]
@@ -1276,7 +1281,9 @@ class PPOTrainer(ABC):
         self._c2_cached_label_token_ids = ids
         return ids
 
-    def _c2_build_probe_prompt(self, prompt_text: str, image_paths: list[str], response_prefix: str, suffix: str, label: str):
+    def _c2_build_probe_prompt(
+        self, prompt_text: str, image_paths: list[str], response_prefix: str, suffix: str, label: str = ""
+    ):
         from PIL import Image
 
         content: list[dict[str, str]] = []
@@ -1334,8 +1341,9 @@ class PPOTrainer(ABC):
         )
         from qwen3vl_vllm_option_probe import (
             clipped_late_gain,
+            generated_token_option_logprobs_from_extra_fields,
             margin_from_option_logprobs,
-            option_logprobs_from_extra_fields,
+            option_logprobs_from_prompt_tail_extra_fields,
         )
 
         probe_started = time.perf_counter()
@@ -1347,35 +1355,60 @@ class PPOTrainer(ABC):
         clip_value = float(os.getenv("OPTION_GAIN_CLIP", "0.5"))
         reward_start_index = int(os.getenv("OPTION_GAIN_REWARD_START_INDEX", "1"))
         max_response_chars = int(os.getenv("OPTION_GAIN_MAX_RESPONSE_CHARS", "4096"))
+        probe_method = os.getenv("OPTION_GAIN_VLLM_PROBE_METHOD", "prompt_logprobs_tail").strip().lower()
+        label_tail = os.getenv("OPTION_GAIN_LABEL_TAIL", ")")
+        vllm_logprobs = int(os.getenv("OPTION_GAIN_VLLM_LOGPROBS", "20"))
+        vllm_prompt_logprobs = int(os.getenv("OPTION_GAIN_VLLM_PROMPT_LOGPROBS", "20"))
         prefixes = response_prefixes_by_frac(str(response_text or "")[:max_response_chars], fracs)
         prompt_text = self._c2_prompt_text(raw_prompt, extra_info)
         image_paths = self._c2_image_paths(extra_info, images_value)
 
         margins: list[float] = []
         for probe_index, prefix in enumerate(prefixes):
-            extra_by_label = {}
-            for label in ("A", "B", "C", "D"):
-                prompt_ids, pil_images = self._c2_build_probe_prompt(prompt_text, image_paths, prefix, suffix, label)
+            if probe_method in {"generated_topk", "generation_topk", "generated"}:
+                prompt_ids, pil_images = self._c2_build_probe_prompt(prompt_text, image_paths, prefix, suffix)
                 output = await client.generate(
-                    request_id=f"c2_1_probe_{batch_key}_{probe_index}_{label}_{uuid.uuid4().hex[:8]}",
+                    request_id=f"c2_1_probe_{batch_key}_{probe_index}_{uuid.uuid4().hex[:8]}",
                     prompt_ids=prompt_ids,
                     sampling_params={
                         "max_tokens": 1,
                         "temperature": 0.0,
                         "top_p": 1.0,
                         "top_k": -1,
-                        "prompt_logprobs": 0,
-                        "logprobs": False,
+                        "logprobs": vllm_logprobs,
                     },
                     image_data=pil_images if pil_images else None,
                 )
-                extra_by_label[label] = output.extra_fields
-            option_logprobs = option_logprobs_from_extra_fields(extra_by_label, label_token_ids)
+                option_logprobs = generated_token_option_logprobs_from_extra_fields(
+                    output.extra_fields, label_token_ids
+                )
+            else:
+                extra_by_label = {}
+                for label in ("A", "B", "C", "D"):
+                    prompt_ids, pil_images = self._c2_build_probe_prompt(
+                        prompt_text, image_paths, prefix, suffix, f"{label}{label_tail}"
+                    )
+                    output = await client.generate(
+                        request_id=f"c2_1_probe_{batch_key}_{probe_index}_{label}_{uuid.uuid4().hex[:8]}",
+                        prompt_ids=prompt_ids,
+                        sampling_params={
+                            "max_tokens": 1,
+                            "temperature": 0.0,
+                            "top_p": 1.0,
+                            "top_k": -1,
+                            "prompt_logprobs": vllm_prompt_logprobs,
+                            "logprobs": False,
+                        },
+                        image_data=pil_images if pil_images else None,
+                    )
+                    extra_by_label[label] = output.extra_fields
+                option_logprobs = option_logprobs_from_prompt_tail_extra_fields(extra_by_label, label_token_ids)
             margins.append(margin_from_option_logprobs(option_logprobs, correct))
 
         gain = clipped_late_gain(margins, clip_value=clip_value, reward_start_index=reward_start_index)
         result = {
             "option_logit_gain_raw": float(gain),
+            "option_correct_present": 1.0 if correct in ("A", "B", "C", "D") else 0.0,
             "option_probe_count": float(len(margins)),
             "option_probe_failed": 0.0,
             "option_probe_deferred": 0.0,
@@ -1387,6 +1420,25 @@ class PPOTrainer(ABC):
             result[f"option_margin_{i}"] = float("nan")
         for i, value in enumerate(margins):
             result[f"option_margin_{i}"] = float(value)
+        if os.getenv("OPTION_GAIN_DEBUG_PRINT", "0") == "1":
+            import hashlib
+
+            response_value = str(response_text or "")
+            prefix_hashes = [
+                hashlib.sha1(prefix.encode("utf-8", errors="ignore")).hexdigest()[:10] for prefix in prefixes
+            ]
+            print(
+                "[qwen3vl_c2_1_vllm_probe_debug]",
+                f"key={batch_key}",
+                f"correct={correct}",
+                f"response_chars={len(response_value)}",
+                f"response_sha1={hashlib.sha1(response_value.encode('utf-8', errors='ignore')).hexdigest()[:10]}",
+                f"prefix_lens={[len(prefix) for prefix in prefixes]}",
+                f"prefix_sha1={prefix_hashes}",
+                f"margins={[round(float(value), 6) for value in margins]}",
+                f"gain={round(float(gain), 6)}",
+                flush=True,
+            )
         return result
 
     async def _c2_probe_batch_async(self, rows: list[dict]) -> list[dict[str, float]]:
@@ -1463,14 +1515,123 @@ class PPOTrainer(ABC):
             failed = np.asarray([item.get("option_probe_failed", 0.0) for item in results], dtype=np.float64)
             elapsed = np.asarray([item.get("option_probe_elapsed_s", 0.0) for item in results], dtype=np.float64)
             counts = np.asarray([item.get("option_probe_count", 0.0) for item in results], dtype=np.float64)
-            metrics.update(
-                {
-                    "c2_1/option_probe_failed_mean": float(failed.mean()),
-                    "c2_1/option_probe_elapsed_s_mean": float(elapsed.mean()),
-                    "c2_1/option_probe_count_mean": float(counts.mean()),
-                }
+            gains = np.asarray([item.get("option_logit_gain_raw", 0.0) for item in results], dtype=np.float64)
+            correct_present = np.asarray(
+                [item.get("option_correct_present", 0.0) for item in results], dtype=np.float64
             )
+            update = {
+                "c2_1/option_probe_failed_mean": float(failed.mean()),
+                "c2_1/option_probe_elapsed_s_mean": float(elapsed.mean()),
+                "c2_1/option_probe_count_mean": float(counts.mean()),
+                "c2_1/option_correct_present_mean": float(correct_present.mean()),
+                "c2_1/option_gain_raw_mean": float(gains.mean()),
+                "c2_1/option_gain_raw_std": float(gains.std(ddof=0)),
+            }
+            expected_margin_count = len(
+                [item for item in os.getenv("OPTION_GAIN_RESPONSE_FRACS", "0.0,0.25,0.50,0.90").split(",") if item]
+            )
+            for margin_idx in range(expected_margin_count):
+                values = np.asarray([item.get(f"option_margin_{margin_idx}", np.nan) for item in results], dtype=np.float64)
+                finite = values[np.isfinite(values)]
+                update[f"c2_1/option_margin_{margin_idx}_finite_mean"] = float(finite.size / max(len(values), 1))
+                update[f"c2_1/option_margin_{margin_idx}_std"] = float(finite.std(ddof=0)) if finite.size else 0.0
+            metrics.update(update)
         return batch
+
+    def _compute_c2_actor_option_gain(
+        self,
+        *,
+        batch: KVBatchMeta,
+        option_logits: torch.Tensor,
+        extra_fields,
+        reward_models,
+        extra_infos,
+        metrics: dict | None = None,
+    ):
+        from mathverse_qwen3vl_option_gain_reward import ground_truth_choice
+        from qwen3vl_actor_option_probe import option_gain_from_actor_logits, parse_probe_fracs
+
+        probe_started = time.perf_counter()
+        clip_value = float(os.getenv("OPTION_GAIN_CLIP", "0.5"))
+        reward_start_index = int(os.getenv("OPTION_GAIN_REWARD_START_INDEX", "1"))
+        fracs = parse_probe_fracs(os.getenv("OPTION_GAIN_RESPONSE_FRACS", "0.0,0.25,0.50,0.90"))
+
+        if getattr(option_logits, "is_nested", False):
+            option_logits = torch.nested.to_padded_tensor(option_logits, padding=float("nan"))
+        logits_list = option_logits.detach().float().cpu().tolist()
+        extra_fields = self._c2_to_list(extra_fields, len(batch), {})
+        reward_models = self._c2_to_list(reward_models, len(batch), {})
+        extra_infos = self._c2_to_list(extra_infos, len(batch), {})
+
+        results: list[dict[str, float]] = []
+        updated_extra = []
+        for row_logits, extra_field, reward_model, extra_info in zip(
+            logits_list, extra_fields, reward_models, extra_infos, strict=True
+        ):
+            reward_model = reward_model if isinstance(reward_model, dict) else {}
+            extra_info = extra_info if isinstance(extra_info, dict) else {}
+            correct = ground_truth_choice(reward_model.get("ground_truth"), extra_info)
+            gain_result = option_gain_from_actor_logits(
+                row_logits,
+                correct=correct,
+                clip_value=clip_value,
+                reward_start_index=reward_start_index,
+            )
+            result = {
+                "option_logit_gain_raw": float(gain_result.gain),
+                "option_correct_present": 1.0 if correct in ("A", "B", "C", "D") else 0.0,
+                "option_probe_count": float(gain_result.probe_count),
+                "option_probe_failed": float(gain_result.probe_failed),
+                "option_probe_deferred": 0.0,
+                "option_probe_elapsed_s": 0.0,
+            }
+            for i in range(len(fracs)):
+                result[f"option_margin_{i}"] = float("nan")
+            for i, value in enumerate(gain_result.margins):
+                result[f"option_margin_{i}"] = float(value)
+            results.append(result)
+
+            extra_field = dict(extra_field or {})
+            reward_extra = dict(extra_field.get("reward_extra_info", {}))
+            reward_extra.update(result)
+            extra_field["reward_extra_info"] = reward_extra
+            updated_extra.append(extra_field)
+
+        elapsed = time.perf_counter() - probe_started
+        if results:
+            per_item_elapsed = float(elapsed / max(len(results), 1))
+            for extra_field in updated_extra:
+                extra_field["reward_extra_info"]["option_probe_elapsed_s"] = per_item_elapsed
+
+        updated_array = np.empty(len(updated_extra), dtype=object)
+        updated_array[:] = updated_extra
+
+        if metrics is not None and results:
+            failed = np.asarray([item.get("option_probe_failed", 0.0) for item in results], dtype=np.float64)
+            counts = np.asarray([item.get("option_probe_count", 0.0) for item in results], dtype=np.float64)
+            gains = np.asarray([item.get("option_logit_gain_raw", 0.0) for item in results], dtype=np.float64)
+            correct_present = np.asarray(
+                [item.get("option_correct_present", 0.0) for item in results], dtype=np.float64
+            )
+            update = {
+                "c2_1/actor_option_probe_failed_mean": float(failed.mean()),
+                "c2_1/actor_option_probe_elapsed_s_mean": float(elapsed / max(len(results), 1)),
+                "c2_1/actor_option_probe_count_mean": float(counts.mean()),
+                "c2_1/actor_option_correct_present_mean": float(correct_present.mean()),
+                "c2_1/actor_option_gain_raw_mean": float(gains.mean()),
+                "c2_1/actor_option_gain_raw_std": float(gains.std(ddof=0)),
+            }
+            for margin_idx in range(len(fracs)):
+                values = np.asarray([item.get(f"option_margin_{margin_idx}", np.nan) for item in results], dtype=np.float64)
+                finite = values[np.isfinite(values)]
+                update[f"c2_1/actor_option_margin_{margin_idx}_finite_mean"] = float(
+                    finite.size / max(len(values), 1)
+                )
+                update[f"c2_1/actor_option_margin_{margin_idx}_std"] = (
+                    float(finite.std(ddof=0)) if finite.size else 0.0
+                )
+            metrics.update(update)
+        return updated_array
 
     def _get_required_batch_multiple(self, dp_size: int) -> int:
         """Return the global batch multiple required by downstream train steps(e.g. critics, actors)."""
@@ -1541,19 +1702,45 @@ class PPOTrainer(ABC):
                 "temperature": self.config.actor_rollout_ref.rollout.temperature,
             }
         )
+        actor_c2_enabled = self._c2_actor_option_gain_enabled()
+        if actor_c2_enabled:
+            from qwen3vl_actor_option_probe import parse_probe_fracs
+
+            label_token_ids = self._c2_label_token_ids()
+            batch.extra_info.update(
+                {
+                    "c2_option_label_token_ids": [label_token_ids[label] for label in ("A", "B", "C", "D")],
+                    "c2_option_probe_fracs": parse_probe_fracs(
+                        os.getenv("OPTION_GAIN_RESPONSE_FRACS", "0.0,0.25,0.50,0.90")
+                    ),
+                }
+            )
         output: KVBatchMeta = self.actor_rollout_wg.compute_log_prob(batch)
         assert len(output) == len(batch)
 
         fields = ["entropy", "log_probs", "response_mask"]
         if self.config.actor_rollout_ref.rollout.calculate_log_probs:
             fields.extend(["responses", "rollout_log_probs"])
+        if actor_c2_enabled:
+            fields.extend(["c2_actor_option_logits", "extra_fields", "reward_model", "extra_info"])
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
 
         # 2. write old_log_probs and entropy back to TransferQueue
         data["old_log_probs"] = response_from_nested(data.pop("log_probs"), data["response_mask"])
         data["entropy"] = response_from_nested(data.pop("entropy"), data["response_mask"])
+        write_back_fields = ["old_log_probs", "entropy"]
+        if actor_c2_enabled and "c2_actor_option_logits" in data.keys():
+            data["extra_fields"] = self._compute_c2_actor_option_gain(
+                batch=batch,
+                option_logits=data.pop("c2_actor_option_logits"),
+                extra_fields=data.pop("extra_fields", None),
+                reward_models=data.pop("reward_model", None),
+                extra_infos=data.pop("extra_info", None),
+                metrics=metrics,
+            )
+            write_back_fields.append("extra_fields")
         batch = tq.kv_batch_put(
-            keys=batch.keys, partition_id=batch.partition_id, fields=data.select("old_log_probs", "entropy")
+            keys=batch.keys, partition_id=batch.partition_id, fields=data.select(*write_back_fields)
         )
 
         data = DataProto(batch=data.to_padded_tensor())

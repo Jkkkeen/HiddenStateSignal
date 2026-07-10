@@ -448,14 +448,32 @@ def build_mtp_speculative_config(
     }
 
 
-def extract_prompt_logprobs(output: RequestOutput, num_prompt_logprobs: Optional[int], result_dict: dict[str, list]):
+def extract_prompt_logprobs(
+    output: RequestOutput,
+    num_prompt_logprobs: Optional[int],
+    result_dict: dict[str, list],
+    prompt_token_ids: Optional[list[int]] = None,
+):
     """Extract prompt log probabilities from generation output."""
     if num_prompt_logprobs is None:
         return
 
     prompt_logprobs_ls, prompt_ids_ls = [], []
+    prompt_actual_ids_ls, prompt_actual_logprobs_ls = [], []
     # NOTE: logprob of first prompt token is None.
-    for logprobs_dict in output.prompt_logprobs[1:]:
+    for prompt_index, logprobs_dict in enumerate(output.prompt_logprobs[1:], start=1):
+        actual_token_id = None
+        actual_logprob = None
+        if prompt_token_ids is not None and prompt_index < len(prompt_token_ids):
+            actual_token_id = int(prompt_token_ids[prompt_index])
+            token_logprob = logprobs_dict.get(actual_token_id)
+            if token_logprob is None:
+                token_logprob = logprobs_dict.get(str(actual_token_id))
+            if token_logprob is not None:
+                actual_logprob = token_logprob.logprob
+        prompt_actual_ids_ls.append([actual_token_id])
+        prompt_actual_logprobs_ls.append([actual_logprob])
+
         if num_prompt_logprobs == 0:
             token_id_str = list(logprobs_dict.keys())[0]
             logprob = logprobs_dict[token_id_str].logprob
@@ -479,6 +497,10 @@ def extract_prompt_logprobs(output: RequestOutput, num_prompt_logprobs: Optional
     # NOTE: pad a dummy prompt logprob for last prompt token.
     prompt_logprobs_ls.append([0.0] * max(num_prompt_logprobs, 1))
     prompt_ids_ls.append([0] * max(num_prompt_logprobs, 1))
+    prompt_actual_logprobs_ls.append([0.0])
+    prompt_actual_ids_ls.append([0])
 
     result_dict["prompt_ids"] = prompt_ids_ls
     result_dict["prompt_logprobs"] = prompt_logprobs_ls
+    result_dict["prompt_actual_ids"] = prompt_actual_ids_ls
+    result_dict["prompt_actual_logprobs"] = prompt_actual_logprobs_ls

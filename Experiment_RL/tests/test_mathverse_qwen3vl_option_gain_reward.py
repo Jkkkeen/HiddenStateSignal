@@ -78,6 +78,18 @@ def test_compute_score_deferred_vllm_backend_does_not_probe(monkeypatch):
         assert math.isnan(result[f"option_margin_{index}"])
 
 
+def test_compute_score_deferred_actor_forward_backend_does_not_probe(monkeypatch):
+    monkeypatch.setenv("OPTION_GAIN_BACKEND", "actor_forward")
+    monkeypatch.setenv("OPTION_GAIN_RESPONSE_FRACS", "0.0,0.25,0.50,0.90")
+
+    result = compute_score(solution_str="Answer: C", ground_truth="C", extra_info={})
+
+    assert result["score"] == 1.0
+    assert result["option_probe_deferred"] == 1.0
+    assert result["option_probe_failed"] == 0.0
+    assert result["option_probe_count"] == 0.0
+
+
 def test_compute_score_carries_question_identity_for_vllm_grouping(monkeypatch):
     monkeypatch.setenv("OPTION_GAIN_BACKEND", "vllm")
 

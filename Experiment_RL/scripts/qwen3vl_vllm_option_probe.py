@@ -57,6 +57,80 @@ def option_logprobs_from_extra_fields(
     return out
 
 
+def prompt_last_matching_token_logprob(extra_fields: dict[str, Any], expected_token_id: int) -> float:
+    """Return the logprob for the last prompt row matching a token id."""
+
+    prompt_ids = list(extra_fields.get("prompt_actual_ids") or extra_fields.get("prompt_ids") or [])
+    prompt_logprobs = list(extra_fields.get("prompt_actual_logprobs") or extra_fields.get("prompt_logprobs") or [])
+    if not prompt_ids or not prompt_logprobs:
+        raise ValueError("prompt_ids and prompt_logprobs must be present")
+    if len(prompt_ids) != len(prompt_logprobs):
+        raise ValueError(f"prompt_ids/logprobs length mismatch: {len(prompt_ids)} != {len(prompt_logprobs)}")
+
+    expected = int(expected_token_id)
+    for token_row, logprob_row in reversed(list(zip(prompt_ids, prompt_logprobs, strict=True))):
+        token_values = list(token_row if isinstance(token_row, (list, tuple)) else [token_row])
+        logprob_values = list(logprob_row if isinstance(logprob_row, (list, tuple)) else [logprob_row])
+        for token_id, logprob in zip(token_values, logprob_values, strict=False):
+            if token_id is not None and int(token_id) == expected:
+                return float(logprob)
+    raise ValueError(f"missing prompt logprob for token {expected}")
+
+
+def option_logprobs_from_prompt_tail_extra_fields(
+    extra_fields_by_label: dict[str, dict[str, Any]],
+    label_token_ids: dict[str, int],
+) -> dict[str, float]:
+    """Parse A/B/C/D option logprobs when label tokens have a trailing prompt token."""
+
+    out: dict[str, float] = {}
+    for label in VALID_OPTIONS:
+        if label not in extra_fields_by_label:
+            raise ValueError(f"missing vLLM probe output for option {label}")
+        if label not in label_token_ids:
+            raise ValueError(f"missing token id for option {label}")
+        out[label] = prompt_last_matching_token_logprob(extra_fields_by_label[label], label_token_ids[label])
+    return out
+
+
+def generated_token_option_logprobs_from_extra_fields(
+    extra_fields: dict[str, Any],
+    label_token_ids: dict[str, int],
+    step_index: int = 0,
+) -> dict[str, float]:
+    """Parse A/B/C/D logprobs from generated-token top-k logprob rows."""
+
+    generation_ids = list(extra_fields.get("generation_ids") or [])
+    generation_logprobs = list(extra_fields.get("generation_logprobs") or [])
+    if len(generation_ids) <= step_index or len(generation_logprobs) <= step_index:
+        raise ValueError("generation_ids and generation_logprobs must contain the requested step")
+    if len(generation_ids) != len(generation_logprobs):
+        raise ValueError(
+            f"generation_ids/logprobs length mismatch: {len(generation_ids)} != {len(generation_logprobs)}"
+        )
+
+    token_ids = list(generation_ids[step_index] or [])
+    token_logprobs = list(generation_logprobs[step_index] or [])
+    if len(token_ids) != len(token_logprobs):
+        raise ValueError(f"generated token row length mismatch: {len(token_ids)} != {len(token_logprobs)}")
+
+    by_token_id: dict[int, float] = {}
+    for token_id, logprob in zip(token_ids, token_logprobs, strict=True):
+        if token_id is None or logprob is None:
+            continue
+        by_token_id[int(token_id)] = float(logprob)
+
+    out: dict[str, float] = {}
+    for label in VALID_OPTIONS:
+        if label not in label_token_ids:
+            raise ValueError(f"missing token id for option {label}")
+        token_id = int(label_token_ids[label])
+        if token_id not in by_token_id:
+            raise ValueError(f"missing generated logprob for option {label} token {token_id}")
+        out[label] = by_token_id[token_id]
+    return out
+
+
 def margin_from_option_logprobs(option_logprobs: dict[str, float], correct: str | None) -> float:
     """Compute correct-option logprob minus the best wrong-option logprob."""
 

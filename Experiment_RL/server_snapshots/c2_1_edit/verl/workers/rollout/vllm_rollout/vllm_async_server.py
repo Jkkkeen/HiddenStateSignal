@@ -514,7 +514,13 @@ class vLLMHttpServer:
         assert 1 <= max_tokens <= max_possible_tokens, (
             f"max_tokens {max_tokens} not in valid range [1, {max_possible_tokens}]"
         )
-        sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
+        requested_logprobs = sampling_params.pop("logprobs", False)
+        if requested_logprobs is True:
+            sampling_params["logprobs"] = 0
+        elif requested_logprobs in (False, None):
+            sampling_params["logprobs"] = None
+        else:
+            sampling_params["logprobs"] = int(requested_logprobs)
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
         sampling_params.setdefault("ignore_eos", self.config.get("ignore_eos", False))
         # Inject per-request seed for deterministic sampling when full_determinism is enabled.
@@ -579,10 +585,22 @@ class vLLMHttpServer:
             output=final_res,
             num_prompt_logprobs=sampling_params.prompt_logprobs,
             result_dict=extra_fields,
+            prompt_token_ids=prompt_ids,
         )
         token_ids = final_res.outputs[0].token_ids
         log_probs = None
         if sampling_params.logprobs is not None:
+            generation_ids = []
+            generation_logprobs = []
+            for logprobs in final_res.outputs[0].logprobs:
+                ranked = sorted(
+                    logprobs.items(),
+                    key=lambda item: getattr(item[1], "rank", len(logprobs) + 1) or len(logprobs) + 1,
+                )
+                generation_ids.append([int(token_id) for token_id, _ in ranked])
+                generation_logprobs.append([float(token_logprob.logprob) for _, token_logprob in ranked])
+            extra_fields["generation_ids"] = generation_ids
+            extra_fields["generation_logprobs"] = generation_logprobs
             log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(final_res.outputs[0].logprobs)]
 
         routed_experts = None

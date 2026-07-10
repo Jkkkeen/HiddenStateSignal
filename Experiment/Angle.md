@@ -907,3 +907,366 @@ top_option can stay constant while margin still changes meaningfully.
 wrong rollouts can still have positive correct margin if the prompt itself makes the answer easy.
 the strongest process signal may be margin degradation, not top-option flip.
 ```
+
+---
+
+## 13. Follow-up: Option-Vector Angle Gain
+
+The option-logit margin experiment in Section 12 compresses the A/B/C/D logits into one scalar:
+
+```text
+margin_j = logit_correct(j) - max_wrong_logit(j)
+gain_j   = margin_j - margin_{j-1}
+```
+
+This is strong and interpretable, but it only asks one question:
+
+```text
+Is the correct option beating the strongest wrong option?
+```
+
+It does not use the full shape of the option-preference vector. A complementary experiment should therefore treat the A/B/C/D logits as a small vector and ask:
+
+```text
+Does the option-logit vector rotate toward the correct-answer direction over reasoning?
+```
+
+This is the option-logit analogue of the hidden-state angle experiment, but in a much more directly interpretable 4-dimensional answer space.
+
+### 13.1 Vector Space
+
+For each probe point `j`, read the same option logits as Section 12:
+
+```text
+z_j = [logit_A(j), logit_B(j), logit_C(j), logit_D(j)]
+```
+
+The first version should use only the MCQ option subspace:
+
+```text
+dimension = 4
+labels    = A/B/C/D
+```
+
+Do not start with the full vocabulary logit vector. Full-vocab angle is much harder to interpret because unrelated high-probability tokens can dominate the direction. It can be a later diagnostic, but not the first reward candidate.
+
+If future datasets include an explicit abstain / invalid / stop choice, the same method can be extended to:
+
+```text
+dimension = 5
+labels    = A/B/C/D/S
+```
+
+For the current MathVerse MCQ setup, use A/B/C/D only.
+
+### 13.2 Centered Option-Logit Direction
+
+Raw logits contain a shared offset that should not affect angles. Define a centered option-logit vector:
+
+```text
+zc_j = z_j - mean(z_j)
+```
+
+For ground-truth option `Y`, define the centered one-hot target direction:
+
+```text
+e_Y  = one_hot(Y)
+ec_Y = e_Y - mean(e_Y)
+```
+
+Then define option-vector correct alignment:
+
+```text
+option_angle_align_j = cos(zc_j, ec_Y)
+```
+
+Interpretation:
+
+```text
+option_angle_align_j high:
+  the whole A/B/C/D logit pattern points toward the correct option
+
+option_angle_align_j low or negative:
+  the option-logit vector points toward a wrong option pattern
+```
+
+This differs from max margin. Margin only cares about the strongest wrong option, while angle uses all wrong options jointly.
+
+Example:
+
+```text
+correct = A
+
+case 1: [A=3.0, B=2.9, C=0.0, D=0.0]
+case 2: [A=3.0, B=1.0, C=1.0, D=1.0]
+```
+
+Both may have positive A margin, but case 2 is more cleanly aligned with the correct one-hot direction because all wrong options are suppressed more evenly.
+
+### 13.3 Angle Gain
+
+Define step-level angle gain:
+
+```text
+option_angle_gain_j = option_angle_align_j - option_angle_align_{j-1}
+```
+
+The rollout-level raw gain should mirror the C2 margin-gain setup:
+
+```text
+R_angle_raw = mean_j clip(option_angle_gain_j, -c, c)
+```
+
+For RL use, apply the same group-level normalization as C2:
+
+```text
+B_angle = clip(zscore_group(R_angle_raw), -2, 2)
+R_total = R_answer + lambda_angle * B_angle
+```
+
+Recommended first RL hyperparameters:
+
+```text
+lambda_angle = 0.1 or 0.2
+clip c       = 0.5
+```
+
+But the first step should be offline analysis, not immediate RL. Angle gain should only become a reward if it provides signal beyond, or complementary to, margin gain.
+
+### 13.4 Secondary Geometry Metrics
+
+Save the following option-vector trajectory diagnostics:
+
+```text
+option_angle_align_j
+option_angle_gain_j
+option_vector_step_angle_j = arccos(cos(zc_j, zc_{j-1}))
+productive_option_turn_j   = option_vector_step_angle_j * max(0, option_angle_gain_j)
+```
+
+Interpretation:
+
+```text
+option_vector_step_angle:
+  how much the model's A/B/C/D preference vector rotates between probes
+
+productive_option_turn:
+  whether a large preference rotation moves toward the correct option
+```
+
+This is especially relevant for long-CoT rethinking. A healthy correction should look like:
+
+```text
+large option-vector turn + positive option_angle_gain
+```
+
+An unproductive oscillation should look like:
+
+```text
+large option-vector turn + zero/negative option_angle_gain
+```
+
+### 13.5 Probe Positions
+
+Use exactly the same probe positions as Section 12 in the offline experiment, so margin and angle can be compared without confounds:
+
+```text
+thinking primary: 5%, 10%, 20%, 30%, 40%, 50%, 60%, 70%, 80%, 90%, 95%, 100%
+answer exploratory: 0%, 25%, 50%, 75%
+```
+
+For RL smoke, use the cheaper C2-style probe set first:
+
+```text
+0%, 25%, 50%, 90%
+```
+
+As in C2, keep `0%` as a diagnostic prompt-only baseline. The primary reward should start from later transitions:
+
+```text
+primary gain transitions:
+  25% -> 50%
+  50% -> 90%
+```
+
+### 13.6 Rollout-Level Features
+
+Primary features:
+
+```text
+late_angle_align_mean
+early_to_late_angle_gain
+mean_angle_gain
+positive_angle_gain_rate
+relative_late_angle_align
+relative_final_angle_align
+productive_option_turn_mean
+productive_option_turn_p90
+```
+
+Definitions:
+
+```text
+prompt_only_angle_align = angle alignment with no rollout prefix
+relative_angle_align_j  = option_angle_align_j - prompt_only_angle_align
+early_to_late_angle_gain = late_angle_align_mean - early_angle_align
+```
+
+Important paired features with margin:
+
+```text
+angle_minus_margin_residual
+angle_gain_given_margin_gain
+within_question_corr(angle_gain, margin_gain)
+```
+
+Purpose:
+
+```text
+Check whether angle gain is genuinely adding information, or only restating margin gain.
+```
+
+### 13.7 Evaluation
+
+Use the same evaluation protocol as Section 12:
+
+```text
+within-question AUROC
+bootstrap CI over questions
+AUROC(+feature) and AUROC(-feature)
+```
+
+Directly compare:
+
+```text
+option-logit margin gain
+option-vector angle gain
+margin + angle combined feature
+```
+
+Recommended combined diagnostic:
+
+```text
+combined_score = zscore(margin_gain) + zscore(angle_gain)
+```
+
+Do not treat the combined score as an RL reward until the individual signals are understood.
+
+### 13.8 Required Controls
+
+Use the same controls as Section 12, plus angle-specific checks:
+
+```text
+1. prompt-only control
+   angle gain should outperform prompt-only alignment if it is a process signal.
+
+2. label permutation control
+   randomly permuted correct labels should drop AUROC to around 0.5.
+
+3. option-order control
+   randomize A/B/C/D order and verify the signal tracks semantic correctness, not label priors.
+
+4. entropy-only control
+   compare angle gain against entropy decrease.
+   If angle only reflects confidence sharpening, entropy may explain it.
+
+5. margin residual control
+   regress angle features on margin features.
+   If residual angle signal still predicts correctness, angle adds information.
+```
+
+### 13.9 Expected Outcomes
+
+Positive:
+
+```text
+angle gain reaches useful AUROC and improves over margin gain,
+or margin+angle improves over margin alone.
+```
+
+Interpretation:
+
+```text
+The full A/B/C/D preference geometry contains process signal beyond the correct-vs-best-wrong scalar margin.
+```
+
+Partial:
+
+```text
+angle gain works but is highly correlated with margin gain.
+```
+
+Interpretation:
+
+```text
+Angle is a useful robustness check, but margin remains the simpler reward.
+```
+
+Negative:
+
+```text
+angle gain stays near AUROC 0.5 or disappears after margin residual control.
+```
+
+Interpretation:
+
+```text
+The extra option-vector geometry does not add enough signal to justify using it in RL.
+```
+
+### 13.10 Relationship to RL Experiments
+
+If offline angle gain is promising, define a new RL branch:
+
+```text
+C3: Option-Vector Angle Gain Reward
+```
+
+Matched against:
+
+```text
+A1: answer-only GRPO baseline
+C2: option-logit margin gain
+C3: option-vector angle gain
+C4: margin gain + angle gain
+```
+
+The first C3 smoke should reuse the C2 infrastructure:
+
+```text
+model: Qwen3-VL-8B-Thinking
+data: MathVerse multimodal pilot
+rollout.n: 4
+max_response_length: 16384
+reward backend: actor_forward
+group zscore: yes
+```
+
+C3 should not replace C2 unless:
+
+```text
+1. offline AUROC is competitive with or better than margin gain,
+2. within-group B_angle has nonzero variance,
+3. all-correct/all-wrong groups get useful rollout ranking from B_angle,
+4. invalid predictions and option drift do not increase.
+```
+
+### 13.11 Practical Recommendation
+
+First run angle gain as an offline add-on to the existing option-logit probe outputs. Since Section 12 already stores A/B/C/D logits or can be modified to store them, the angle experiment should not require new generation.
+
+Recommended order:
+
+```text
+1. Add saving of raw A/B/C/D logits at every probe.
+2. Compute margin features and angle features from the same saved logits.
+3. Compare AUROC and bootstrap CI.
+4. Check residual signal after controlling for margin gain.
+5. Only then consider C3 RL reward.
+```
+
+This keeps the scientific question clean:
+
+```text
+Does vector direction in option-logit space add information beyond scalar margin gain?
+```

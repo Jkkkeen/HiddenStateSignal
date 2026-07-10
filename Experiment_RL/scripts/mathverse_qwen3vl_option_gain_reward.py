@@ -300,7 +300,8 @@ def compute_score(
     option_gain_raw = 0.0
     probe_started = time.perf_counter()
     response_chars = len(str(solution_str or ""))
-    probe_deferred = 1.0 if backend in {"vllm", "vllm_prompt_logprobs", "deferred_vllm"} else 0.0
+    deferred_backends = {"vllm", "vllm_prompt_logprobs", "deferred_vllm", "actor", "actor_forward", "hf_actor", "fsdp_actor"}
+    probe_deferred = 1.0 if backend in deferred_backends else 0.0
     if not probe_deferred:
         try:
             prompt_text, image_paths = prompt_and_images_from_extra_info(extra_info)

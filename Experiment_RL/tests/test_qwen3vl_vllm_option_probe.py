@@ -5,9 +5,12 @@ import pytest
 from scripts.qwen3vl_vllm_option_probe import (
     build_probe_text,
     clipped_late_gain,
+    generated_token_option_logprobs_from_extra_fields,
     margin_from_option_logprobs,
     option_logprobs_from_extra_fields,
+    option_logprobs_from_prompt_tail_extra_fields,
     prompt_actual_token_logprob,
+    prompt_last_matching_token_logprob,
 )
 
 
@@ -41,6 +44,66 @@ def test_option_logprobs_from_extra_fields_maps_abcd_outputs():
     out = option_logprobs_from_extra_fields(by_label, {"A": 32, "B": 33, "C": 34, "D": 35})
 
     assert out == {"A": -0.7, "B": -1.5, "C": -0.4, "D": -2.0}
+
+
+def test_prompt_last_matching_token_logprob_reads_label_before_tail():
+    extra_fields = {
+        "prompt_ids": [[101], [35], [8], [0]],
+        "prompt_logprobs": [[-0.1], [-3.5], [-0.2], [0.0]],
+    }
+
+    assert prompt_last_matching_token_logprob(extra_fields, expected_token_id=35) == -3.5
+
+
+def test_prompt_last_matching_token_logprob_prefers_actual_prompt_fields():
+    extra_fields = {
+        "prompt_actual_ids": [[101], [35], [8], [0]],
+        "prompt_actual_logprobs": [[-0.1], [-3.5], [-0.2], [0.0]],
+        "prompt_ids": [[101], [999], [8], [0]],
+        "prompt_logprobs": [[-0.1], [0.0], [-0.2], [0.0]],
+    }
+
+    assert prompt_last_matching_token_logprob(extra_fields, expected_token_id=35) == -3.5
+
+
+def test_option_logprobs_from_prompt_tail_extra_fields_maps_abcd_outputs():
+    by_label = {
+        "A": {"prompt_ids": [[10], [32], [8], [0]], "prompt_logprobs": [[-0.1], [-0.7], [-0.2], [0.0]]},
+        "B": {"prompt_ids": [[10], [33], [8], [0]], "prompt_logprobs": [[-0.1], [-1.5], [-0.2], [0.0]]},
+        "C": {"prompt_ids": [[10], [34], [8], [0]], "prompt_logprobs": [[-0.1], [-0.4], [-0.2], [0.0]]},
+        "D": {"prompt_ids": [[10], [35], [8], [0]], "prompt_logprobs": [[-0.1], [-2.0], [-0.2], [0.0]]},
+    }
+
+    out = option_logprobs_from_prompt_tail_extra_fields(by_label, {"A": 32, "B": 33, "C": 34, "D": 35})
+
+    assert out == {"A": -0.7, "B": -1.5, "C": -0.4, "D": -2.0}
+
+
+def test_generated_token_option_logprobs_from_extra_fields_reads_first_step_topk():
+    extra_fields = {
+        "generation_ids": [[11, 12, 13, 14, 99]],
+        "generation_logprobs": [[-0.9, -0.1, -2.5, -1.7, -4.0]],
+    }
+
+    out = generated_token_option_logprobs_from_extra_fields(
+        extra_fields,
+        {"A": 11, "B": 12, "C": 13, "D": 14},
+    )
+
+    assert out == {"A": -0.9, "B": -0.1, "C": -2.5, "D": -1.7}
+
+
+def test_generated_token_option_logprobs_from_extra_fields_rejects_missing_label():
+    extra_fields = {
+        "generation_ids": [[11, 12, 13]],
+        "generation_logprobs": [[-0.9, -0.1, -2.5]],
+    }
+
+    with pytest.raises(ValueError, match="missing generated logprob"):
+        generated_token_option_logprobs_from_extra_fields(
+            extra_fields,
+            {"A": 11, "B": 12, "C": 13, "D": 14},
+        )
 
 
 def test_margin_from_option_logprobs_uses_correct_minus_best_wrong():
