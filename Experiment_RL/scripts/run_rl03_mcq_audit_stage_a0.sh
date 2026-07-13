@@ -9,6 +9,8 @@ RAW_ROLLOUTS=${RAW_ROLLOUTS:-${PROJECT_ROOT}/data_long/rollouts_thinking_smoke50
 FEATURES_PATH=${FEATURES_PATH:-${PROJECT_ROOT}/option_logit_trimmed_conclusion_smoke500/trimmed_conclusion_features.parquet}
 MATHVERSE_METADATA=${MATHVERSE_METADATA:-${PROJECT_ROOT}/data/mathverse/testmini.json}
 
+STAGE_NAME=${STAGE_NAME:-stage_a0}
+SELECTION_MODE=${SELECTION_MODE:-mixed-smoke}
 RUN_NAME=${RUN_NAME:-rl03_stage_a0_smoke32_seed20260713}
 RUN_ROOT=${RUN_ROOT:-${PROJECT_ROOT}/rl03_results/${RUN_NAME}}
 MANIFEST_DIR=${MANIFEST_DIR:-${RUN_ROOT}/manifest}
@@ -20,6 +22,15 @@ MAX_MODEL_LEN=${MAX_MODEL_LEN:-32768}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.70}
 BOOTSTRAP_SAMPLES=${BOOTSTRAP_SAMPLES:-10000}
 OVERWRITE=${OVERWRITE:-0}
+
+if [[ "${STAGE_NAME}" != "stage_a0" && "${STAGE_NAME}" != "stage_a1" ]]; then
+  echo "Unsupported Stage A name: ${STAGE_NAME}" >&2
+  exit 2
+fi
+if [[ "${SELECTION_MODE}" != "mixed-smoke" && "${SELECTION_MODE}" != "all-parseable" ]]; then
+  echo "Unsupported Stage A selection mode: ${SELECTION_MODE}" >&2
+  exit 2
+fi
 
 require_data2_path() {
   resolved=$(realpath -m "$1")
@@ -97,7 +108,11 @@ finish() {
       }
     ' "${RUN_ROOT}/resource_samples.csv" > "${RUN_ROOT}/resource_peaks.txt"
   fi
-  echo "RL03_STAGE_A0_EXIT_CODE=${status}" | tee "${RUN_ROOT}/exit_code.txt"
+  if [[ "${STAGE_NAME}" == "stage_a0" ]]; then
+    echo "RL03_STAGE_A0_EXIT_CODE=${status}" | tee "${RUN_ROOT}/exit_code.txt"
+  else
+    echo "RL03_STAGE_A1_EXIT_CODE=${status}" | tee "${RUN_ROOT}/exit_code.txt"
+  fi
   date --iso-8601=seconds | tee "${RUN_ROOT}/finished_at.txt"
   free -h > "${RUN_ROOT}/memory_after.txt"
   df -h / /data2 > "${RUN_ROOT}/disk_after.txt"
@@ -150,7 +165,7 @@ sample_resources() {
     sleep 5
   done
 }
-sample_resources > "${RUN_ROOT}/resource_samples.csv" 2>&1 &
+sample_resources > "${RUN_ROOT}/resource_samples.csv" 2> "${RUN_ROOT}/resource_samples.stderr" &
 monitor_pid=$!
 
 cd "${PROJECT_ROOT}"
@@ -174,16 +189,22 @@ free -h > "${RUN_ROOT}/memory_before.txt"
 df -h / /data2 > "${RUN_ROOT}/disk_before.txt"
 nvidia-smi > "${RUN_ROOT}/nvidia_smi_before.txt" 2>&1
 
-"${ENV_ROOT}/bin/python" scripts/build_rl03_mcq_audit_manifest.py \
+builder_args=(
   --raw-rollouts "${RAW_ROLLOUTS}" \
   --features "${FEATURES_PATH}" \
   --mathverse-metadata "${MATHVERSE_METADATA}" \
   --output-dir "${MANIFEST_DIR}" \
-  --question-count 32 \
   --seed "${SEED}"
+)
+builder_args+=(--selection-mode "${SELECTION_MODE}")
+builder_args+=(--stage-name "${STAGE_NAME}")
+if [[ "${SELECTION_MODE}" == "mixed-smoke" ]]; then
+  builder_args+=(--question-count 32)
+fi
+"${ENV_ROOT}/bin/python" scripts/build_rl03_mcq_audit_manifest.py "${builder_args[@]}"
 
 score_args=(
-  --manifest "${MANIFEST_DIR}/stage_a0_manifest.jsonl"
+  --manifest "${MANIFEST_DIR}/${STAGE_NAME}_manifest.jsonl"
   --model "${MODEL_PATH}"
   --output-dir "${SCORE_DIR}"
   --project-root "${PROJECT_ROOT}"

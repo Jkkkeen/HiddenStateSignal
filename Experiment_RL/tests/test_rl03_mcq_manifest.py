@@ -2,6 +2,8 @@ import pandas as pd
 import json
 import pytest
 
+import scripts.build_rl03_mcq_audit_manifest as manifest_module
+
 from scripts.build_rl03_mcq_audit_manifest import (
     build_manifest_records,
     build_probe_prefixes,
@@ -59,6 +61,19 @@ def test_select_mixed_question_ids_parses_string_booleans_without_truthiness():
             question_count=1,
             seed=3,
         )
+
+
+def test_select_all_question_ids_returns_every_unique_question_in_sorted_order():
+    features = pd.DataFrame(
+        [
+            {"question_id": "q2", "is_correct": True},
+            {"question_id": "q1", "is_correct": False},
+            {"question_id": "q2", "is_correct": False},
+            {"question_id": 3, "is_correct": True},
+        ]
+    )
+
+    assert manifest_module.select_all_question_ids(features) == ["3", "q1", "q2"]
 
 
 def test_build_probe_prefixes_keeps_dense_grid_and_separate_trimmed_control():
@@ -230,6 +245,40 @@ def test_write_manifest_bundle_records_checksums_and_selected_ids(tmp_path):
     ]
     assert protocol["decision_thresholds"]["process_auc_min"] == 0.70
     assert protocol["gate_order"][2] == "LEVEL-EQUIVALENT"
+
+
+def test_write_manifest_bundle_supports_stage_a1_names_without_creating_a0_files(tmp_path):
+    raw_path = tmp_path / "raw.jsonl"
+    feature_path = tmp_path / "features.parquet"
+    metadata_path = tmp_path / "metadata.json"
+    raw_path.write_text("{}\n", encoding="utf-8")
+    feature_path.write_bytes(b"parquet-placeholder")
+    metadata_path.write_text("[]\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    summary = write_manifest_bundle(
+        [
+            {
+                "protocol_version": "rl03_stage_a_v2",
+                "question_id": "q1",
+                "rollout_id": 0,
+                "is_correct": True,
+            }
+        ],
+        selected_question_ids=["q1"],
+        output_dir=output_dir,
+        seed=17,
+        raw_path=raw_path,
+        features_path=feature_path,
+        metadata_path=metadata_path,
+        stage_name="stage_a1",
+    )
+
+    assert (output_dir / "stage_a1_manifest.jsonl").is_file()
+    assert (output_dir / "stage_a1_selected_question_ids.txt").is_file()
+    assert (output_dir / "stage_a1_manifest_summary.json").is_file()
+    assert not list(output_dir.glob("stage_a0_*"))
+    assert summary["stage_name"] == "stage_a1"
 
 
 def test_write_manifest_bundle_refuses_to_overwrite_changed_frozen_manifest(tmp_path):

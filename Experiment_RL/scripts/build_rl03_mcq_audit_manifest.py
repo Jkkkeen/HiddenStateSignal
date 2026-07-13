@@ -95,6 +95,14 @@ def select_mixed_question_ids(
     return sorted(str(value) for value in rng.choice(eligible, size=count, replace=False))
 
 
+def select_all_question_ids(features: pd.DataFrame) -> list[str]:
+    """Select every question represented by an already-filtered feature table."""
+
+    if "question_id" not in features.columns:
+        raise ValueError("features missing columns: ['question_id']")
+    return sorted(features["question_id"].astype(str).unique().tolist())
+
+
 def build_probe_prefixes(think_text: str, trimmed_text: str) -> list[dict[str, object]]:
     """Materialize the frozen prompt, dense thinking, and trimmed probe prefixes."""
 
@@ -321,8 +329,12 @@ def write_manifest_bundle(
     features_path: Path,
     metadata_path: Path,
     extra_summary: Mapping[str, Any] | None = None,
+    stage_name: str = "stage_a0",
 ) -> dict[str, Any]:
-    """Write the immutable Stage A0 manifest, selection, and checksum summary."""
+    """Write an immutable Stage A manifest, selection, and checksum summary."""
+
+    if stage_name not in {"stage_a0", "stage_a1"}:
+        raise ValueError(f"unsupported stage name {stage_name!r}")
 
     frozen_records = sorted(
         (dict(record) for record in records),
@@ -342,11 +354,11 @@ def write_manifest_bundle(
         raise ValueError("selected question ids do not match manifest records")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = output_dir / "stage_a0_manifest.jsonl"
+    manifest_path = output_dir / f"{stage_name}_manifest.jsonl"
     manifest_text = "".join(
         json.dumps(record, ensure_ascii=False) + "\n" for record in frozen_records
     )
-    selected_path = output_dir / "stage_a0_selected_question_ids.txt"
+    selected_path = output_dir / f"{stage_name}_selected_question_ids.txt"
     selected_text = "".join(f"{question_id}\n" for question_id in chosen)
     for path, expected in ((manifest_path, manifest_text), (selected_path, selected_text)):
         if path.exists() and path.read_text(encoding="utf-8") != expected:
@@ -433,7 +445,9 @@ def write_manifest_bundle(
         if overlap:
             raise ValueError(f"extra summary cannot replace frozen keys: {sorted(overlap)}")
         summary.update(dict(extra_summary))
-    summary_path = output_dir / "stage_a0_manifest_summary.json"
+    if stage_name != "stage_a0":
+        summary["stage_name"] = stage_name
+    summary_path = output_dir / f"{stage_name}_manifest_summary.json"
     summary_text = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     if summary_path.exists() and summary_path.read_text(encoding="utf-8") != summary_text:
         raise ValueError(f"refusing to overwrite changed frozen manifest file {summary_path}")
@@ -485,6 +499,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mathverse-metadata", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--question-count", type=int, default=32)
+    parser.add_argument(
+        "--selection-mode",
+        choices=("mixed-smoke", "all-parseable"),
+        default="mixed-smoke",
+    )
+    parser.add_argument("--stage-name", choices=("stage_a0", "stage_a1"), default="stage_a0")
     parser.add_argument("--seed", type=int, default=20260713)
     return parser.parse_args(argv)
 
@@ -496,11 +516,14 @@ def main(argv: list[str] | None = None) -> None:
     features = _load_features(args.features)
     parseable, excluded = parseable_question_ids(raw_rows, metadata)
     features = features[features["question_id"].astype(str).isin(parseable)].copy()
-    selected = select_mixed_question_ids(
-        features,
-        question_count=args.question_count,
-        seed=args.seed,
-    )
+    if args.selection_mode == "all-parseable":
+        selected = select_all_question_ids(features)
+    else:
+        selected = select_mixed_question_ids(
+            features,
+            question_count=args.question_count,
+            seed=args.seed,
+        )
     records = build_manifest_records(
         raw_rows,
         features,
@@ -519,6 +542,7 @@ def main(argv: list[str] | None = None) -> None:
             "parseable_questions": len(parseable),
             "excluded_unparseable_questions": excluded,
         },
+        stage_name=args.stage_name,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 

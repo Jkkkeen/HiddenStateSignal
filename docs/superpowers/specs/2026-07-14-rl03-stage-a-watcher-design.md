@@ -19,20 +19,20 @@ The old RL02 answer-only GRPO scripts also use the name `A1`; they are unrelated
 
 ## Components
 
-### Local poller
+### In-session poller
 
-A PowerShell script performs one idempotent poll. Windows Task Scheduler invokes it every ten minutes. A lock file prevents overlapping invocations, and a local state JSON records each terminal transition.
+The active Codex execution session performs one read-only remote check every ten minutes until A0 reaches a terminal state. It does not create a script, register a Windows task, or install a persistent service.
 
 Each poll:
 
 1. Reads the remote A0 `exit_code.txt`, `scores/run_summary.json`, `audit/metric_summary.json`, and process/tmux state over `ssh h200`.
-2. Records a timestamped status line locally.
+2. Reports a timestamped status line in the active execution session.
 3. Returns without modifying the server while A0 is incomplete.
 4. Copies the completed A0 run and log into a temporary local directory, then promotes the directory only after required files are present.
 5. Re-runs or validates the analysis locally. Failure to execute the local analyzer is terminal and does not fall back to an unverified launch decision.
 6. Evaluates the engineering smoke gate.
 7. Starts A1 once, only if the smoke gate passes and no A1 session or terminal A1 artifact already exists.
-8. Disables its own scheduled task after A1 is confirmed started or after a terminal A0 failure is recorded.
+8. Ends the polling loop after A1 is confirmed started or after a terminal A0 failure is recorded.
 
 ### A0 completion and smoke gate
 
@@ -63,7 +63,7 @@ If A0 fails, the watcher does not launch A1. It writes a local failure report co
 
 ### Stage A1 launcher
 
-Stage A1 uses the same protocol version, model, source rollouts, interfaces, target normalization, probe matrix, seed, scorer, and analysis code as A0. The only intended change is selection size: all 3,858 available rollouts are included, with primary statistics on the 206 mixed-correctness questions.
+Stage A1 uses the same protocol version, model, source rollouts, interfaces, target normalization, probe matrix, seed, scorer, and analysis code as A0. The only intended change is selection size. Every rollout whose four option contents can be recovered from the frozen prompt or MathVerse metadata is included; excluded question IDs and reasons are recorded in the immutable summary. The 2026-07-14 manifest contains 434 questions and 3,348 rollouts. This is a coverage limitation relative to the 3,858-rollout source, not an outcome-based selection rule.
 
 The launcher:
 
@@ -79,16 +79,15 @@ Because the A1 request matrix is much larger than A0, the launch confirmation re
 
 ## Verification
 
-- Unit tests cover incomplete, failed, passed, duplicate, and malformed A0 states.
-- A dry run exercises the poller without copying or launching.
+- The in-session poll loop is exercised against the live incomplete A0 run before any launch action.
 - Existing RL03 tests remain green.
-- A local one-shot poll is run before installing the scheduled task.
 - After conditional launch, verification requires the expected A1 tmux name, command, log path, output path, and a growing progress file.
 
 ## Safety Properties
 
 - No package installation or system cleanup on H200.
 - No process termination.
+- No scheduled task, service, cron entry, or persistent poller installation.
 - No automatic scientific-method changes after observing A0.
 - No duplicate A1 launch.
 - No A1 launch from partial or server-only evidence.

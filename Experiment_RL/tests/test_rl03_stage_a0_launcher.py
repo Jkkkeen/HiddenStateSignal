@@ -51,6 +51,13 @@ def test_stage_a0_preflight_aborts_on_busy_gpu_without_cleaning_processes():
     assert "gcs_server" in text
 
 
+def test_stage_a0_resource_sampler_keeps_xtrace_out_of_csv():
+    text = (SCRIPTS / "run_rl03_mcq_audit_stage_a0.sh").read_text(encoding="utf-8")
+
+    assert 'sample_resources > "${RUN_ROOT}/resource_samples.csv" 2> "${RUN_ROOT}/resource_samples.stderr" &' in text
+    assert 'sample_resources > "${RUN_ROOT}/resource_samples.csv" 2>&1 &' not in text
+
+
 def test_stage_a0_tmux_launcher_is_idempotent_and_reports_attach_command():
     text = (SCRIPTS / "launch_rl03_mcq_audit_stage_a0_tmux.sh").read_text(
         encoding="utf-8"
