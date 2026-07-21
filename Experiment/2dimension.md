@@ -216,8 +216,15 @@ last-token 表示读完整个 span 后的 prefix state；span-mean 用于检验�
 
 ### 4.2 Discovery/confirmatory 问题划分
 
-在查看新方向指标之前，只在满足主 segment 条件且至少有 `2 correct + 2 wrong` 的 eligible questions 中，
-按 `question_id` 固定划分：
+这里的 `cohort` 指按同一套 eligibility 条件筛出、承担同一种分析用途的一组题。实验 1 的
+**primary cohort（主分析题集）**要求满足主 segment 条件且至少有 `3 correct + 3 wrong`。这样任意一条
+rollout 作为 query 被剔除后，两侧仍至少各有 2 条 reference，能够保留“同题存在多条正确路径”这一结构。
+
+现有 clean 数据中约 72 题满足 `3+3`；正式数字以 complete-think eligibility audit 为准。至少 `2+2`
+但不满足 `3+3` 的问题只进入 **secondary coverage cohort（补充覆盖题集）**，因为它们在
+leave-one-out 后每侧可能只剩一条 reference，不能可靠代表多路径集合。
+
+在查看新方向指标之前，按主分析题集的 `question_id` 固定划分：
 
 ```text
 discovery pool      70%，供实验 1/2 pilot、扩展、选层和特征消融
@@ -230,20 +237,51 @@ confirmatory pool   30%，在实验 3 规格冻结前不计算新 2Dimension 指
 若过滤后 eligible questions 太少，导致 30% confirmatory pool 无法给出有效 CI，则改用全量 nested
 grouped CV；此时实验 3 必须称为第二阶段 discovery，不能称为 confirmatory。
 
-### 4.3 Reference/query cross-fitting
+### 4.3 Balanced leave-one-rollout-out reference
 
-每题进行 repeated stratified 2-fold cross-fitting：一半 rollout 构造 reference，另一半只作为 query，
-然后交换；主结果跨 20 个固定随机划分取均值。
+每题只有 8 条 rollout，若使用 2-fold，会把本来就很少的正确路径再砍掉一半。主分析因此使用
+**balanced leave-one-rollout-out（balanced LOO）**，把每条 rollout 依次作为 query，并从其余 rollout
+构造 observed success/failure reference sets。
 
-每次划分中：
+对问题 `q`，设最终正确/错误 rollout 数分别为 `n_q+`、`n_q-`，固定每侧 reference 数量：
 
-- correct/wrong reference 数量取两组最小值并随机等量抽样；
-- query 不进入任何 reference 集，`++` 和 `--` 也不存在 self-match；
+\[
+m_q=\min(n_q^+-1,n_q^--1).
+\]
+
+对 query rollout `i` 和标签 `b`：
+
+\[
+R_{q,i}^{b}
+=
+\{j:j\ne i,\ y_j=b\}.
+\]
+
+从 `R+`、`R-` 各选择恰好 `m_q` 条 reference，并穷举所有 balanced subset pairs：
+
+\[
+\mathcal B_{q,i}
+=
+\binom{R_{q,i}^{+}}{m_q}
+\times
+\binom{R_{q,i}^{-}}{m_q}.
+\]
+
+每题总共只有 8 条 rollout，在 `3+3`、`3+4`、`3+5` 或 `4+4` 的可行构成下，每个 query 最多只有
+18 个 balanced subset pairs，因此无需随机抽样。主 query score 对所有 subset pairs 取均值，并保留
+subset-level 分布用于稳定性分析。`m_q` 对该题所有 query 固定，不会因 query 属于 correct/wrong 而产生
+集合大小差异。对于恰好 `3+3` 的题，`m_q=2`；正确路径较多的题会在全部 subset pairs 中得到覆盖。
+
+每个 query/balanced-subset 中：
+
+- correct/wrong reference 始终各为 `m_q` 条；
+- query 按 rollout id 从两侧 reference 中统一剔除，`++` 和 `--` 均无 self-match；
 - 每条 reference rollout 在同 progress bin 中最多贡献一个与 query `rho` 最近的 span displacement；
 - query correctness 只用于事后分组评估，不能参与 query score 计算；
 - layer、符号、超参数和模型组合只能在 discovery training questions 中选择。
 
-这比单纯 leave-one-out 更严格。leave-one-out 与 naive in-sample 只用于量化泄漏，不作为正式结果。
+不同 query 会共享部分 reference，因此所有 CI 和 permutation 都以 question 为独立单位，不能把 query/span
+当独立样本。严格 stratified 2-fold 作为 sensitivity analysis；naive in-sample 只用于量化 self-match 泄漏。
 
 ### 4.4 四格角度与对称交互
 
@@ -257,7 +295,16 @@ S_i^b
 \cos(d_i,d_j).
 \]
 
-主分析固定 `K=1`，即 nearest-manifold；`K=all` 作为 mean-direction 消融。定义：
+主分析固定 `K=1`，即 nearest observed path；`K=2` 和 `K=all` 作为 top-2 / mean-reference 消融。定义：
+
+这里的 `R+` 是**多条 observed success trajectories 的集合**，不是一条唯一正确轨迹。`K=1` 的含义是：
+只要 query 当前移动接近任意一条已观察到的成功路径，就认为它仍有 success-path support。由于每题只有
+8 条 rollout，这个集合不能覆盖所有真实正确解法，因此全文只能称 observed success reference set，不能
+称完整的 correct manifold。
+
+另外，final-answer correct 只定义 success-conditioned rollout，不保证其中每个 span 都逻辑正确。正确
+rollout 可能先走错再修正、绕路或猜对；因此实验 1 检验的是“当前移动是否得到已观察成功路径的支持”，
+不能把低 `S+` 的位置直接称为逻辑错误点。
 
 \[
 A_{\rm angle}^{ab}
@@ -271,7 +318,7 @@ A_{\rm angle}^{ab}
 A^{++},\quad A^{+-},\quad A^{-+},\quad A^{--}.
 \]
 
-query 对 correct/wrong reference manifold 的选择性分数为：
+query 对 observed correct/wrong reference sets 的选择性分数为：
 
 \[
 D_{i,\rm angle}=S_i^+-S_i^-.
@@ -285,7 +332,7 @@ I_{\rm angle}
 \]
 
 只检验 `A++ > A-+` 会产生“正确组本来就更紧”的自证风险；四格交互要求 correct query 相对偏向
-correct manifold 的程度，显著强于 wrong query 的这种偏向。
+observed correct reference set 的程度，显著强于 wrong query 的这种偏向。
 
 ### 4.5 幅度加权版
 
@@ -320,8 +367,12 @@ I_{\rm amp}
 
 ### 5.2 Pilot 数据与最小 forward
 
-从 discovery pool 固定选取 32-50 个问题，按 correct/wrong 数量和四个 think-length bins 分层。复用已有
-long rollout 文本，不重新生成，只对完整 think token 段做 hidden forward：
+从 primary discovery pool 固定选取 32-40 个 `3+3` 问题，按 correct/wrong 数量和四个 think-length bins
+分层。复用已有 long rollout 文本，不重新生成，只对完整 think token 段做 hidden forward：
+
+**硬约束：实验 1 禁止重新调用 vLLM 采样。** rollout 文本、rollout id、最终答案、correctness、
+finish reason 和截断状态全部以现有 labeled JSONL 为准；模型仅以 `eval + inference_mode` 重放固定序列并
+提取 hidden states，因此实验成本是 representation extraction，不是 generation。
 
 ```text
 model            Qwen/Qwen3-VL-8B-Thinking
@@ -334,21 +385,23 @@ saved metadata   question/rollout/label/span bounds/rho/think length/segment sta
 选择 L24/L36 是因为现有 long path 和 macro-angular 已在这两层形成可直接比较的 baseline。实验 1 不抽
 37 层，也不永久保存每 token hidden。forward 中临时 token hidden 在完成 span pooling 后立即释放。
 
-若 pilot 通过第 5.5 节 gate，再以完全冻结的提取和评分方式扩展到 discovery pool 其余 eligible questions；
-pilot 问题保留在 discovery，不能进入 confirmatory pool。
+若 pilot 通过第 5.5 节 gate，再以完全冻结的提取和评分方式扩展到 primary discovery pool 其余问题；
+随后将冻结分数应用到 `2+2` 补充覆盖题集，单独报告 reference 稀疏时是否仍保持方向。pilot
+问题保留在 discovery，不能进入 confirmatory pool。
 
 ### 5.3 主分析
 
 对 `layer 24/36 × last/mean`：
 
 1. 构造 span displacement `d` 和 10-bin relative progress；
-2. repeated cross-fitting 计算 `S+`、`S-`；
+2. balanced LOO + 穷举等量 reference subset pairs，计算并平均 `S+`、`S-`；
 3. 输出 angle/amplitude 的四格表；
 4. 计算 `I_angle`、`I_amp` 及 question-bootstrap 95% CI；
 5. 计算 `D_angle`、`D_amp` 的 within-question corr 和 pairwise AUC；
-6. 绘制 layer、progress、length-bin 曲线和 correct/wrong 分布。
+6. 记录每个 query/span 实际选中的 nearest reference rollout id；
+7. 绘制 layer、progress、length-bin 曲线和 correct/wrong 分布。
 
-主规格为 `span-last + K=1 + 10 progress bins`。`span-mean`、`K=all`、5 bins 均为预先声明的敏感性
+主规格为 `span-last + K=1 + 10 progress bins`。`span-mean`、`K=2/all`、5 bins 均为预先声明的敏感性
 分析，不能事后取最大值作为主结果。
 
 ### 5.4 必做控制
@@ -357,22 +410,25 @@ pilot 问题保留在 discovery，不能进入 confirmatory pool。
 C1  对称 reference：完整报告 A++ / A+- / A-+ / A-- 和 interaction。
 C2  幅度：angle 与 query-amplitude 两版同时报告，不能只保留较好版本。
 C3  进度：10-bin relative-progress matched 为主，5-bin 和无匹配为消融。
-C4  数量：correct/wrong reference 严格等量；固定 K，避免 max 的集合大小偏差。
-C5  泄漏：cross-fit 为主；naive in-sample / leave-one-out 只量化泄漏。
-C6  置换：题内打乱标签，整套 cross-fit 重跑，构造 interaction null。
-C7  长度：报告四个 think-length bins，并控制 think_length、n_spans、mean ||d||。
-C8  截断/分段：主分析只用 clean complete-think；其他状态只作 sensitivity。
+C4  数量：每题所有 query 固定相同 m_q；穷举 correct/wrong 等量 subset pairs。
+C5  多路径：balanced LOO 为主；K=2/all、严格 2-fold 和 2+2 补充题集为 sensitivity。
+C6  泄漏：query 必须按 id 剔除；naive in-sample 只用于量化 self-match 泄漏。
+C7  置换：题内打乱标签，重新构造 reference sets 并重跑整套 LOO，得到 interaction null。
+C8  Coverage：报告 nearest-reference 使用频率；移除最常被选中的 reference 后重算稳健性。
+C9  长度：报告四个 think-length bins，并控制 think_length、n_spans、mean ||d||。
+C10 截断/分段：主分析只用 clean complete-think；其他状态只作 sensitivity。
 ```
 
 ### 5.5 Pilot gate
 
 pilot 不以单次 `p<0.05` 作为唯一标准。进入 discovery 扩展需要：
 
-1. `I_amp` 在多数 reference splits 中方向稳定为正；
+1. 对全部 balanced subsets 平均后的 `I_amp` 为正，并在多数 question-bootstrap resamples 中保持正号；
 2. L24/L36 至少一层稳定，但效应不只来自单一 progress bin；
 3. 题内 label permutation 后 interaction 回到 null；
 4. 控制 think length、n_spans 和 mean displacement 后效应不归零；
-5. amplitude 版至少比纯 angle 更稳定，或明确出现可解释的互补模式。
+5. amplitude 版至少比纯 angle 更稳定，或明确出现可解释的互补模式；
+6. 效应不由单条正确 reference 独占，移除最常选 reference 后符号不翻转。
 
 结果解释：
 
@@ -437,7 +493,7 @@ M7  M6 + D_amp                                                    与强 logit v
 2. 题内标签置换不能复现 interaction；
 3. `D_amp` 相对 long path/macro baseline 有稳定正增量，而不只是 standalone AUC；
 4. 控制 think length、n_spans 和 relative progress 后效应仍存在；
-5. 信号不依赖某一个 reference split、单一 layer 或单一 progress/length bin。
+5. 信号不依赖某一个 balanced-reference subset、单一 layer 或单一 progress/length bin。
 
 不要求 hidden 指标超过 option-logit。建议把稳定 `ΔAUC >= 0.01` 作为值得继续的实用阈值，但统计判断
 仍以 bootstrap CI、跨 split 稳定性和局部 progress 结构为主。
@@ -459,7 +515,7 @@ M7  M6 + D_amp                                                    与强 logit v
 
 ```text
 候选 score、符号、layer set / 聚合、span size、stride、K、progress bins、
-selector 标准化、tau、cross-fit、primary endpoint 和成功阈值。
+selector 标准化、tau、balanced LOO/subsampling、primary endpoint 和成功阈值。
 ```
 
 如果 confirmatory pool 不足，或查看其新指标后继续调参，实验 3 必须降级为第二阶段 discovery。
@@ -480,15 +536,15 @@ storage             保存 span 级压缩结果，不永久保存每 token hidde
 `64/32` 和 `256/128` 只在 3A 做敏感性分析，3B 只运行冻结规格。semantic-step 边界作为 secondary，
 不作为主切分，因为过短 step 的 SVD 不稳定且不同 rollout 样本量不可比。
 
-为控制 long-response 存储，推荐按 question 处理 8 条 rollout：临时保留该题 span vectors，完成 reference
-cross-fit 和 selector 统计后立即释放。永久文件至少保存：
+为控制 long-response 存储，推荐按 question 处理 8 条 rollout：临时保留该题 span vectors，完成 balanced
+LOO reference scoring 和 selector 统计后立即释放。永久文件至少保存：
 
 ```text
 question/rollout/correctness/span bounds/rho/think length/segment status
 冻结 layer set 的 span-last / span-mean（如需复核，float16）
 每层 centered spectral entropy E、H、ER
 相邻层 ΔE、|ΔE|、Δlayer_L2
-cross-fitted D_angle / D_amp 与 selector-weighted scores
+balanced-LOO D_angle / D_amp、reference subset/id 与 selector-weighted scores
 ```
 
 ### 7.3 Centered spectral entropy
@@ -606,7 +662,7 @@ span-Wasserstein、angular OT 和 activation patching 属于后续机制实验�
 
 - 所有主结果只使用第 1.1 节 long-response setting；
 - 主单位是 question，不把 span 当独立样本计算 CI；
-- 主指标是 cross-fitted within-question pairwise AUC 和 question-level bootstrap CI；
+- 主指标是 balanced-LOO within-question pairwise AUC 和 question-level bootstrap CI；
 - 同时报 within-question Spearman、四格 interaction、per-progress 与 per-length effect；
 - 模型比较使用完全相同的 eligible subset 和 outer folds；
 - 全层探索只发生在 3A，3B 不选层、不调参；
@@ -617,7 +673,7 @@ span-Wasserstein、angular OT 和 activation patching 属于后续机制实验�
 ```text
 LONG_EXPERIMENT_1_RESULTS.md              四格表、interaction、progress/length 曲线
 long_experiment_1_span_vectors*.npz       L24/L36 span-last/mean 压缩向量
-long_experiment_1_features.parquet        cross-fitted query 分数
+long_experiment_1_features.parquet        balanced-LOO query 分数与 selected reference id
 long_experiment_1_interactions.csv        question × layer × progress interaction
 
 LONG_EXPERIMENT_2_RESULTS.md              long baseline nested model 与增量 AUC
