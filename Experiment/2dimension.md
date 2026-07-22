@@ -532,6 +532,11 @@ c^{\rm layer-turn}_{i,k,l}
 跨 rollout 比较只在同题、同 layer、同 relative-progress bin 中进行。query rollout 按 id 从所有 reference
 中剔除，并对 correct/wrong reference 数量做等量 balanced LOO。
 
+对每个 query span，每条 reference rollout 在该 bin 内最多贡献一个与 query 的 `rho` 最近的 span；若该
+rollout 在该 bin 中没有可用 span，则不进入该 query 的 reference set。下式中的集合运算是简记：实际计算时，
+先在每个 correct/wrong 等量子集内分别得到 score，再对预声明的 balanced subsets 取平均，避免较长 rollout
+或 span 更密的 rollout 获得更大权重。
+
 对 span displacement 单位方向：
 
 \[
@@ -635,7 +640,7 @@ E0-F1  horizontal_norm × span_turn_cos scatter / hexbin，按 layer 与 progres
 E0-F2  cross_length_support × cross_set_direction scatter，叠加 prototype control
 E0-F3  coordinate_entropy × vertical_norm / span_layer_turn_cos scatter
 E0-F4  layer × progress 的 correct-minus-wrong Hedges' g heatmap
-E0-F5  64/32、128/64、256/128 与 span-last 的 angle SNR / reliability 对照
+E0-F5  64/32、128/64、256/128 的 span-mean、token-angle 与 span-last 的 angle SNR / reliability 对照
 E0-F6  四个 think-length bins 的 effect curve 与样本覆盖
 ```
 
@@ -898,7 +903,8 @@ ER_{i,k,l}=\exp(H_{i,k,l}).
 奇异值不贡献熵。3A 必须先用仓库既有 centered ER 函数对相同矩阵做一致性测试，再运行 3B。
 
 `E` 是归一化谱熵，`ER` 用于与仓库既有 centered ER 实现核对。它们与“把单个 hidden vector 的
-各坐标平方归一化后算熵”不同；后者依赖任意 hidden coordinate basis，不作为本计划指标。
+各坐标平方归一化后算熵”不同；后者依赖 hidden-coordinate basis，因此只在实验 0 作为同一模型内的
+discovery diagnostic，不作为实验 3 的主 selector、跨模型复杂度或 rotation-invariant claim。
 
 纵向 entropy selector 使用：
 
@@ -974,8 +980,10 @@ span-Wasserstein、angular OT 和 activation patching 属于后续机制实验�
 
 - 所有主结果只使用第 1.1 节 long-response setting；
 - 主单位是 question，不把 span 当独立样本计算 CI；
-- 主指标是 balanced-LOO within-question pairwise AUC 和 question-level bootstrap CI；
-- 同时报 within-question Spearman、四格 interaction、per-progress 与 per-length effect；
+- 实验 0 主指标是 `layer × progress` 的 correct/wrong Hedges' `g`、题间符号一致率和 question-level bootstrap CI；
+- 实验 1/2 主指标是 balanced-LOO within-question pairwise AUC 和 question-level bootstrap CI；
+- 实验 0 同时报 scatter/hexbin、per-progress、per-layer 与 per-length effect；实验 1/2 另报 within-question
+  Spearman 和预声明的四格 interaction；
 - 模型比较使用完全相同的 eligible subset 和 outer folds；
 - 全层探索只发生在实验 0 discovery 与 3A，3B 不选层、不调参；
 - 同时报 effect size、CI、有效问题数、rollout/segment 排除流图，不只报 p-value。
