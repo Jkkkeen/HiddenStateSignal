@@ -19,6 +19,7 @@ rollout 构造 privileged reference，但任何候选分数在给 query rollout 
 执行顺序固定为：
 
 ```text
+实验 0：多分辨率 hidden dynamics discovery；token-level 测幅度/熵，span-pooled 测角度/跨 rollout 方向。
 实验 1：Long span 两层 pilot；验证 success-trajectory 的角度和幅度加权角度。
 实验 2：复用实验 1 的 long hidden 特征及现有 long baseline，定位增量来源，不新增 forward。
 实验 3：仅在实验 1+2 通过后做 long span 全层 forward，验证纵向 L2 / spectral-entropy selector。
@@ -107,8 +108,8 @@ max response tokens    1031
 response >= 1536       0
 ```
 
-因此它不能支持本项目的 long-response 主张。旧缓存只用于回顾短/长 setting 差异，不用于实验 1 的
-四格方向、实验 2 的增量模型或实验 3 的 selector。
+因此它不能支持本项目的 long-response 主张。旧缓存只用于回顾短/长 setting 差异，不用于实验 0 的
+多分辨率 discovery、实验 1 的四格方向、实验 2 的增量模型或实验 3 的 selector。
 
 ### 1.4 Long 数据目前缺少什么
 
@@ -116,7 +117,9 @@ response >= 1536       0
 任意可重算的 hidden vector，也没有全层 token/span 谱统计。因此：
 
 - long rollout 不需要重新生成；
-- 实验 1 必须做一次最小 hidden forward；
+- 实验 0 需要在有界 discovery 子集上做一次全层 hidden forward，但 token-level 结果在线压缩为标量，
+  跨 rollout 的 span vectors 只在单题内临时保留；
+- 实验 1 对实验 0 未覆盖的问题只补做 L24/L36 最小 hidden forward，并复用重叠问题的兼容 span 输出；
 - 实验 2 复用实验 1 输出和现有 long 标量，不新增 forward；
 - 实验 3 只有通过 gate 后才做全层 hidden forward。
 
@@ -145,7 +148,7 @@ local angular                           约 0.50
 long option-logit think_final_margin    AUROC 约 0.789
 ```
 
-这些 baseline 必须在实验 1 的同一 eligible subset 上重新评估后才能比较。option-logit 是外部强参照，
+这些 baseline 必须在实验 0/1 的同一 eligible subset 上重新评估后才能比较。option-logit 是外部强参照，
 不是 hidden 指标必须超过的停止阈值；新 hidden 指标的目标是提供更局部、可用于 span credit、且在
 length/path/logit level 之外仍有增量的信息。
 
@@ -184,8 +187,8 @@ hidden norm 变化，不能在实验前直接等同于语义。
 ```text
 window = 128 think tokens
 stride = 64 think tokens
-primary representation   span endpoint last-token hidden
-secondary representation span-mean hidden
+direction primary        span-mean hidden
+direction control        span endpoint last-token hidden
 ```
 
 主分析只保留完整的 128-token span；末尾不足 128 token 的 partial span 不做 padding，也不进入主分数，
@@ -199,8 +202,9 @@ g_{i,k,l}\in\mathbb R^d,
 d_{i,k,l}=g_{i,k,l}-g_{i,k-1,l}.
 \]
 
-last-token 表示读完整个 span 后的 prefix state；span-mean 用于检验结果是否依赖单点状态。主实验不能
-在看到结果后交换二者的 primary/secondary 地位。
+span-mean 先对局部窗口去噪，再计算位移和角度；last-token 实际对应每 64 token 采样一次 endpoint，
+用于检查结果是否依赖窗口平均。角度流的主/对照地位必须在实验 0 discovery 结束后、任何 locked evaluation
+之前冻结，不能在 confirmatory 结果出来后交换。
 
 相对进度定义为：
 
@@ -227,7 +231,7 @@ leave-one-out 后每侧可能只剩一条 reference，不能可靠代表多路�
 在查看新方向指标之前，按主分析题集的 `question_id` 固定划分：
 
 ```text
-discovery pool      70%，供实验 1/2 pilot、扩展、选层和特征消融
+discovery pool      70%，供实验 0/1/2 pilot、扩展、选层和特征消融
 confirmatory pool   30%，在实验 3 规格冻结前不计算新 2Dimension 指标
 ```
 
@@ -358,14 +362,321 @@ I_{\rm amp}
 
 ---
 
-## 5. 实验 1：Long Success-Trajectory 四格交互
+## 5. 实验 0：多分辨率横纵 Hidden Dynamics Discovery
 
-### 5.1 目的
+### 5.1 目的与边界
+
+实验 0 不先构造一个统一分数，而是分别回答三个更基础的问题：
+
+```text
+E0-A  单条 rollout 内，横向 movement length、length change 是否在 correct/wrong 间存在差异？
+E0-B  progress-matched 的跨 rollout 长度支持和方向支持，是否更接近正确而非错误轨迹？
+E0-C  同一 token 的纵向 layer update norm、centered entropy 与层间转向是否包含正确性结构？
+```
+
+这里采用按统计量选择分辨率的 Hybrid C：
+
+```text
+token-amplitude stream   横向/纵向 L2、长度变化、centered entropy；在线计算标量后聚合到 bin
+span-direction stream    横向转折角、纵向层更新角、跨 rollout 方向；span pooling 后再计算
+common analysis unit     question × rollout × relative-progress-bin × layer
+```
+
+理由是高维空间中的逐 token 位移方向容易集中在近似正交背景附近；角度类量先做 span pooling 可以降低
+token identity 与局部噪声。L2 norm 和 entropy 也受 layer scale 与高维集中影响，但不需要保存方向向量，
+可以在线计算后用同 layer、同 progress bin 的 robust normalization 控制。
+
+实验 0 只做 discovery atlas、correct/wrong 差异和 SNR 诊断，不做 RL，不把多个量相乘，也不以 standalone
+AUROC 最大的组合直接进入实验 1。最终答案标签只用于分组评估和构造 leave-one-out reference；query 自身标签
+不能进入其候选分数。
+
+### 5.2 数据、cohort 与 forward
+
+复用第 1.1 节的固定 long rollout，不重新生成：
+
+```text
+smoke                         8 个 primary discovery 问题
+formal discovery             16-24 个 primary discovery 问题
+eligibility                   clean complete-think + 每题至少 3 correct / 3 wrong
+layers                        embedding output + 全部 transformer hidden-state indexes
+analysis segment              完整 think token 段
+new generation                no
+```
+
+题目按 correct/wrong 数量和 `<2k / 2-4k / 4-8k / 8k+` 长度桶分层抽取。实验 0 可以与实验 1 共用 discovery
+问题，因为二者都属于规格发现阶段，但 confirmatory pool 在所有分辨率、layer、符号和统计口径冻结前保持不可见。
+
+2026-07-22 已完成的实验 1 原始运行把 `span-last` 声明为 primary、`span-mean` 声明为 sensitivity。实验 0 是
+在查看该结果后加入的，因此不能追溯性地把那次运行改称“预注册的 span-mean 主结果”。实验 0 可以为后续 locked
+evaluation 冻结新的 span-mean angle 规格，但论文和报告必须保留这一时间顺序。
+
+### 5.3 Token-Amplitude Stream：横向/纵向长度与 Centered Entropy
+
+对 rollout `i`、生成 token `t`、layer `l`，横向逐 token 更新为：
+
+\[
+\delta^{\rm time}_{i,t,l}=h^l_{i,t}-h^l_{i,t-1},
+\qquad
+r^{\rm time}_{i,t,l}=\|\delta^{\rm time}_{i,t,l}\|_2.
+\]
+
+“横向长度差”单独定义为相邻 movement length 的一阶差分，而不是把 `r` 本身也称为长度差：
+
+\[
+\Delta r^{\rm time}_{i,t,l}
+=r^{\rm time}_{i,t,l}-r^{\rm time}_{i,t-1,l}.
+\]
+
+固定 token、沿 layer 的纵向更新为：
+
+\[
+\delta^{\rm layer}_{i,t,l}=h^l_{i,t}-h^{l-1}_{i,t},
+\qquad
+r^{\rm layer}_{i,t,l}=\|\delta^{\rm layer}_{i,t,l}\|_2,
+\]
+
+\[
+\Delta r^{\rm layer}_{i,t,l}
+=r^{\rm layer}_{i,t,l}-r^{\rm layer}_{i,t,l-1}.
+\]
+
+实验 0 的 entropy 作用于纵向更新向量，而不是原始 residual hidden，也不是实验 3 的 span spectral entropy。
+先沿 hidden coordinate 中心化：
+
+\[
+z_{i,t,l,j}
+=\delta^{\rm layer}_{i,t,l,j}
+-\frac{1}{d}\sum_{m=1}^{d}\delta^{\rm layer}_{i,t,l,m}.
+\]
+
+再把中心化激活变成非负能量分布：
+
+\[
+p_{i,t,l,j}
+=\frac{z_{i,t,l,j}^2}{\sum_m z_{i,t,l,m}^2+\epsilon},
+\]
+
+\[
+H^{\rm coord}_{i,t,l}
+=-\frac{\sum_jp_{i,t,l,j}\log(p_{i,t,l,j}+\epsilon)}{\log d},
+\qquad
+N^{\rm eff}_{i,t,l}
+=\exp\left(-\sum_jp_{i,t,l,j}\log(p_{i,t,l,j}+\epsilon)\right).
+\]
+
+`Hcoord` 高表示 layer update 能量分布在较多 coordinates，低表示集中在较少 coordinates。不能使用
+`softmax(h-mean(h))` 声称完成了中心化熵，因为 softmax 对统一平移不变，减均值不会改变结果。
+`Hcoord` 依赖模型学到的 hidden-coordinate basis，因此只作为同一模型内的 discovery 指标；不能把它
+解释成旋转不变的表示复杂度，也不能直接与实验 3 的 span spectral entropy 混称为同一种 entropy。
+
+每个 `rollout × progress-bin × layer` 至少保存：
+
+```text
+mean / median / P90 horizontal_norm
+mean / median horizontal_norm_delta
+mean / median / P90 vertical_norm
+mean / median vertical_norm_delta
+mean centered_coordinate_entropy / effective_dimensions
+token_count 与有效差分数量
+```
+
+P90 用于保留短暂 activity burst；主比较同时报告 mean 与 median，避免单个极端 token 主导。
+
+### 5.4 Span-Direction Stream：Pooling 后的横向与纵向角度
+
+角度主表示固定为先做 span-mean，再做差分：
+
+\[
+g^l_{i,k}
+=\frac{1}{|S_{i,k}|}\sum_{t\in S_{i,k}}h^l_{i,t},
+\qquad
+D^{\rm time}_{i,k,l}=g^l_{i,k}-g^l_{i,k-1}.
+\]
+
+主规格为 `window/stride=128/64`；`64/32` 与 `256/128` 只用于实验 0 的 SNR sensitivity。
+`span-last` 是 endpoint control。不能先把每个 token displacement 归一化再平均，因为这会让微小噪声位移
+和大幅度位移获得相同权重。
+
+单 rollout 横向转折以 cosine 为主统计量：
+
+\[
+c^{\rm time-turn}_{i,k,l}
+=\frac{(D^{\rm time}_{i,k,l})^\top D^{\rm time}_{i,k-1,l}}
+{\|D^{\rm time}_{i,k,l}\|_2\|D^{\rm time}_{i,k-1,l}\|_2+\epsilon}.
+\]
+
+角度制只用于解释和绘图：
+
+\[
+\theta^{\rm time-turn}_{i,k,l}
+=\arccos\left(\operatorname{clip}(c^{\rm time-turn}_{i,k,l},-1,1)\right).
+\]
+
+纵向角度同样在 span-pooled 表示上计算：
+
+\[
+D^{\rm layer}_{i,k,l}=g^l_{i,k}-g^{l-1}_{i,k},
+\]
+
+\[
+c^{\rm layer-turn}_{i,k,l}
+=\frac{(D^{\rm layer}_{i,k,l})^\top D^{\rm layer}_{i,k,l-1}}
+{\|D^{\rm layer}_{i,k,l}\|_2\|D^{\rm layer}_{i,k,l-1}\|_2+\epsilon}.
+\]
+
+该量表示连续两层是否沿近似一致的方向更新当前局部语义窗口。它不同于 `||h_l-h_{l-1}||`，也不同于
+某层 update 与 residual state 本身的夹角；后者可以作为预声明 control，但不能事后替换主纵向角度。
+
+### 5.5 跨 Rollout：正确/错误长度支持与方向支持
+
+跨 rollout 比较只在同题、同 layer、同 relative-progress bin 中进行。query rollout 按 id 从所有 reference
+中剔除，并对 correct/wrong reference 数量做等量 balanced LOO。
+
+对 span displacement 单位方向：
+
+\[
+U_{i,k,l}=\frac{D^{\rm time}_{i,k,l}}{\|D^{\rm time}_{i,k,l}\|_2+\epsilon}.
+\]
+
+主方向支持保留多路径 nearest-reference set：
+
+\[
+S^+_{i,k,l}=\max_{j\in G_q^+\setminus i}\cos(U_{i,k,l},U_{j,b,l}),
+\qquad
+S^-_{i,k,l}=\max_{j\in G_q^-\setminus i}\cos(U_{i,k,l},U_{j,b,l}),
+\]
+
+\[
+D^{\rm set-dir}_{i,k,l}=S^+_{i,k,l}-S^-_{i,k,l}.
+\]
+
+正确/错误单中心只作可解释性对照：
+
+\[
+\mu^+_{q,b,l}=\operatorname{normalize}\left(\sum_{j\in G_q^+\setminus i}U_{j,b,l}\right),
+\qquad
+\mu^-_{q,b,l}=\operatorname{normalize}\left(\sum_{j\in G_q^-\setminus i}U_{j,b,l}\right),
+\]
+
+\[
+D^{\rm proto-dir}_{i,k,l}
+=\cos(U_{i,k,l},\mu^+_{q,b,l})-\cos(U_{i,k,l},\mu^-_{q,b,l}).
+\]
+
+若正确路径方向多模态，单中心可能发生向量抵消，因此不能把 prototype 优于 set 或 set 优于 prototype
+解释为普遍规律；两者回答的是“公共方向”与“任一可行成功路径”两个不同问题。
+
+跨 rollout 长度使用正标量的几何均值。令 `R=||Dtime||`：
+
+\[
+m^+_{q,b,l}
+=\exp\left(\frac{1}{|G_q^+\setminus i|}\sum_{j\in G_q^+\setminus i}\log(R_{j,b,l}+\epsilon)\right),
+\]
+
+错误组同理得到 `m-`，长度支持差为：
+
+\[
+D^{\rm length}_{i,k,l}
+=|\log R_{i,k,l}-\log m^-_{q,b,l}|
+-|\log R_{i,k,l}-\log m^+_{q,b,l}|.
+\]
+
+正值表示 query 的 movement length 更接近正确 rollout 的典型幅度。实验 0 只比较这些 query score 在
+correct/wrong rollout 上的分布；实验 1 才使用完整四格交互排除“某一组本来就更紧”的自证风险。
+
+### 5.6 Relative-Progress 对齐、在线计算与永久存储
+
+token 与 span 都映射到共同相对进度：
+
+\[
+\rho_{i,t}=\frac{t}{T_i},
+\qquad
+b_{i,t}=\min(\lfloor B\rho_{i,t}\rfloor,B-1).
+\]
+
+主分析使用 `B=10`；`B=20` 只用于观察局部结构是否被 10-bin 过度平滑。不同分辨率只共享 bin key，
+不把 token 指标与 span 指标假装成逐点一一对应。
+
+按 question 顺序处理：
+
+```text
+单条 rollout forward
+→ 在线计算 token-level horizontal/vertical norm 与 coordinate entropy
+→ 聚合到 progress bins
+→ 临时保留该 rollout 的全层 span-mean / span-last vectors
+→ 立即释放 token hidden
+
+该题 8 条 rollout 完成
+→ balanced LOO 跨 rollout 长度/方向评分
+→ 保存标量表与少量审计样本
+→ 删除该题临时 span vectors
+```
+
+永久主表的粒度固定为：
+
+```text
+question_id / rollout_id / correctness / progress_bin / layer
+horizontal_norm / horizontal_norm_delta
+vertical_norm / vertical_norm_delta / coordinate_entropy / effective_dimensions
+span_turn_cos / span_layer_turn_cos
+cross_set_direction / cross_prototype_direction / cross_length_support
+think_length / token_count / span_count / segment status
+```
+
+不永久保存完整 `[T,L,d]` token hidden。为了复核数值，仅允许固定少量 audit questions 保存 float16 span
+vectors；audit 题必须在运行前确定，不能根据效果大小挑选。
+
+### 5.7 可视化、SNR 检验与统计口径
+
+实验 0 的主图不是单一 AUC 排名，而是 correct/wrong dynamics atlas：
+
+```text
+E0-F1  horizontal_norm × span_turn_cos scatter / hexbin，按 layer 与 progress 分面
+E0-F2  cross_length_support × cross_set_direction scatter，叠加 prototype control
+E0-F3  coordinate_entropy × vertical_norm / span_layer_turn_cos scatter
+E0-F4  layer × progress 的 correct-minus-wrong Hedges' g heatmap
+E0-F5  64/32、128/64、256/128 与 span-last 的 angle SNR / reliability 对照
+E0-F6  四个 think-length bins 的 effect curve 与样本覆盖
+```
+
+散点的统计单位是 `rollout × progress-bin × layer`，但 CI、置换和模型比较的独立单位始终是 question。
+必须同时画 raw 与 within-question centered 版本，防止题目难度和回答长度制造表面分离。
+
+角度 pooling 的收益不能只靠“高维噪声”解释，必须实测：
+
+1. 在固定 audit subset 上把 token-level turning cosine 作为负面对照；
+2. 比较各 span 规格的 Hedges' `g`、question-bootstrap CI 与题间符号一致率；
+3. 用 matched random-pair cosine 得到同 layer/progress 的正交背景均值和方差；
+4. 报告 span angle 的 split-half/reference-bootstrap reliability；
+5. 检查收益是否只来自更少样本、更长有效 lag 或单一异常问题。
+
+所有 feature 至少控制 `think_length`、有效 token/span 数、mean hidden/update norm、relative progress 和 layer
+scale。题内 label permutation 必须重新计算 correct/wrong reference geometry，不能只在最终表上交换标签。
+
+### 5.8 实验 0 的决策规则与实验 1 接口
+
+实验 0 不以某个散点“看起来分开”作为通过。进入实验 1 前需要：
+
+1. `span-mean` 角度相对 token-angle/span-last 至少在 effect stability 或 reliability 上有一致优势；
+2. 横向长度、角度或二者联合结构不只由单一 progress bin、layer、长度桶或问题驱动；
+3. 跨 rollout `D_set-dir` 在 leave-one-out、balanced references 和 label permutation 下方向合理；
+4. coordinate entropy / vertical norm 若有信号，控制 layer scale 与 horizontal norm 后仍保留；
+5. 所有进入实验 1 的 representation、window/stride、layer 候选和 score 符号在 confirmatory 前冻结。
+
+若 token-level 长度/纵向 entropy 有差异，但跨 rollout direction 完全为 null，则保留实验 0 的描述性结果，
+不进入 success-trajectory 四格主线。若只有 span-pooled direction 稳定，则实验 1 聚焦 outcome-conditioned
+direction；纵向 activity 留在实验 3 selector 路线，不提前与横向分数相乘。
+
+---
+
+## 6. 实验 1：Long Success-Trajectory 四格交互
+
+### 6.1 目的
 
 判断 long-response correct/wrong rollout 的 span-level 横向位移是否具有 outcome-specific 方向结构，
 并区分该结构来自纯角度还是来自有实际幅度的运动。
 
-### 5.2 Pilot 数据与最小 forward
+### 6.2 Pilot 数据与最小 forward
 
 从 primary discovery pool 固定选取 32-40 个 `3+3` 问题，按 correct/wrong 数量和四个 think-length bins
 分层。复用已有 long rollout 文本，不重新生成，只对完整 think token 段做 hidden forward：
@@ -385,11 +696,11 @@ saved metadata   question/rollout/label/span bounds/rho/think length/segment sta
 选择 L24/L36 是因为现有 long path 和 macro-angular 已在这两层形成可直接比较的 baseline。实验 1 不抽
 37 层，也不永久保存每 token hidden。forward 中临时 token hidden 在完成 span pooling 后立即释放。
 
-若 pilot 通过第 5.5 节 gate，再以完全冻结的提取和评分方式扩展到 primary discovery pool 其余问题；
+若 pilot 通过第 6.5 节 gate，再以完全冻结的提取和评分方式扩展到 primary discovery pool 其余问题；
 随后将冻结分数应用到 `2+2` 补充覆盖题集，单独报告 reference 稀疏时是否仍保持方向。pilot
 问题保留在 discovery，不能进入 confirmatory pool。
 
-### 5.3 主分析
+### 6.3 主分析
 
 对 `layer 24/36 × last/mean`：
 
@@ -401,10 +712,11 @@ saved metadata   question/rollout/label/span bounds/rho/think length/segment sta
 6. 记录每个 query/span 实际选中的 nearest reference rollout id；
 7. 绘制 layer、progress、length-bin 曲线和 correct/wrong 分布。
 
-主规格为 `span-last + K=1 + 10 progress bins`。`span-mean`、`K=2/all`、5 bins 均为预先声明的敏感性
-分析，不能事后取最大值作为主结果。
+后续主规格为实验 0 冻结的 `span-mean + K=1 + 10 progress bins`。`span-last`、`K=2/all`、5 bins 均为
+预先声明的敏感性分析，不能事后取最大值作为主结果。2026-07-22 已完成运行仍按其原始
+`span-last primary / span-mean sensitivity` 口径审计，不能追溯性改名。
 
-### 5.4 必做控制
+### 6.4 必做控制
 
 ```text
 C1  对称 reference：完整报告 A++ / A+- / A-+ / A-- 和 interaction。
@@ -419,7 +731,7 @@ C9  长度：报告四个 think-length bins，并控制 think_length、n_spans�
 C10 截断/分段：主分析只用 clean complete-think；其他状态只作 sensitivity。
 ```
 
-### 5.5 Pilot gate
+### 6.5 Pilot gate
 
 pilot 不以单次 `p<0.05` 作为唯一标准。进入 discovery 扩展需要：
 
@@ -441,9 +753,9 @@ I_angle > 0，I_amp ≈ 0      存在方向结构，但尚未对应可用推进�
 
 ---
 
-## 6. 实验 2：Long Baseline 增量来源（不新增 forward）
+## 7. 实验 2：Long Baseline 增量来源（不新增 forward）
 
-### 6.1 目的与数据
+### 7.1 目的与数据
 
 实验 1 即使得到正 interaction，也可能只是重新表达 long path length、macro angular 或长度。实验 2
 只回答“新方向选择性增加了什么”，不新增 hidden forward。
@@ -458,7 +770,7 @@ I_angle > 0，I_amp ≈ 0      存在方向结构，但尚未对应可用推进�
 所有 baseline 必须限制在实验 1 的同一 eligible questions/rollouts 上重新评估。特征标准化、缺失值、
 layer 选择和模型系数均只在 discovery training questions 中确定，外层按 `question_id` 分组交叉验证。
 
-### 6.2 分层模型
+### 7.2 分层模型
 
 ```text
 M0  think_length + n_spans + progress coverage                    nuisance baseline
@@ -485,7 +797,7 @@ M7  M6 + D_amp                                                    与强 logit v
 主要报告 outer-fold within-question pairwise AUC、within-question corr、`ΔAUC(M5-M1)`、
 `ΔAUC(M7-M6)` 及 question-bootstrap 95% CI。long option-logit 约 0.789 只作参照，不能作为硬上界。
 
-### 6.3 进入实验 3 的门槛
+### 7.3 进入实验 3 的门槛
 
 只有同时满足以下条件才做全层 forward：
 
@@ -500,9 +812,9 @@ M7  M6 + D_amp                                                    与强 logit v
 
 ---
 
-## 7. 实验 3：Long Span 全层 Selector（需要新 forward）
+## 8. 实验 3：Long Span 全层 Selector（需要新 forward）
 
-### 7.1 Discovery calibration 与 confirmatory 条件
+### 8.1 Discovery calibration 与 confirmatory 条件
 
 实验 3 分两段：
 
@@ -520,15 +832,15 @@ selector 标准化、tau、balanced LOO/subsampling、primary endpoint 和成功
 
 如果 confirmatory pool 不足，或查看其新指标后继续调参，实验 3 必须降级为第二阶段 discovery。
 
-### 7.2 Forward、span 与存储
+### 8.2 Forward、span 与存储
 
 继续使用第 1.1 节的同一 Thinking long-response setting和 clean complete-think 主子集，不重新生成
 rollout。主设定：
 
 ```text
 window / stride     128 / 64 think tokens
-horizontal primary span-last hidden
-horizontal control span-mean hidden
+horizontal primary span-mean hidden
+horizontal control span-last hidden
 layers              全部 hidden-state indexes；相邻 block selector 使用 l=1..36
 storage             保存 span 级压缩结果，不永久保存每 token hidden
 ```
@@ -547,7 +859,7 @@ question/rollout/correctness/span bounds/rho/think length/segment status
 balanced-LOO D_angle / D_amp、reference subset/id 与 selector-weighted scores
 ```
 
-### 7.3 Centered spectral entropy
+### 8.3 Centered spectral entropy
 
 对 span `k`、layer `l`，把 span 内 token hidden 堆成：
 
@@ -598,7 +910,7 @@ s^E_{i,k,l}=|\Delta E_{i,k,l}|.
 
 保留 signed `ΔE` 做机制解释，使用 `|ΔE|` 表示该层发生表示重组的强度。
 
-### 7.4 相邻层 L2 selector
+### 8.4 相邻层 L2 selector
 
 令 `g` 为同一 span 的 span-last 或 span-mean hidden：
 
@@ -611,7 +923,7 @@ s^{L2}_{i,k,l}
 
 不能用 `||h_L36-h_L24||` 冒充相邻层 selector。index 0 是 embedding output，不称为 transformer layer 0。
 
-### 7.5 横纵组合与主对照
+### 8.5 横纵组合与主对照
 
 主分析沿用实验 1 冻结后的 `D_amp`，`D_angle` 作为对照。先用 3A training data 的
 `layer × progress-bin` median/IQR 分别校准 `s_E` 和 `s_L2`，再只沿 layer 归一化。
@@ -649,28 +961,33 @@ D_{i,k,l,\rm amp}.
 同时报告 `WE` 与 `WL2` 的 layer-rank overlap。entropy 自身 AUC 很低但 `WE > U`，仍支持它是 selector；
 若 `WE ≈ WL2 ≈ U`，则纵向选择没有增量。
 
-### 7.6 后续局部有效性验证
+### 8.6 后续局部有效性验证
 
 只有 3B 主检验为正后，才对高/低 `D_amp` 或 selector span 做 continuation sampling，检验后续成功率。
 span-Wasserstein、angular OT 和 activation patching 属于后续机制实验，不进入第一版主分析。
 
 ---
 
-## 8. 统计口径、产出与停止规则
+## 9. 统计口径、产出与停止规则
 
-### 8.1 统一统计口径
+### 9.1 统一统计口径
 
 - 所有主结果只使用第 1.1 节 long-response setting；
 - 主单位是 question，不把 span 当独立样本计算 CI；
 - 主指标是 balanced-LOO within-question pairwise AUC 和 question-level bootstrap CI；
 - 同时报 within-question Spearman、四格 interaction、per-progress 与 per-length effect；
 - 模型比较使用完全相同的 eligible subset 和 outer folds；
-- 全层探索只发生在 3A，3B 不选层、不调参；
+- 全层探索只发生在实验 0 discovery 与 3A，3B 不选层、不调参；
 - 同时报 effect size、CI、有效问题数、rollout/segment 排除流图，不只报 p-value。
 
-### 8.2 每步产出
+### 9.2 每步产出
 
 ```text
+LONG_EXPERIMENT_0_RESULTS.md              多分辨率 dynamics atlas、SNR、progress/layer/length 图
+long_experiment_0_bin_features.parquet    question × rollout × bin × layer 标量
+long_experiment_0_question_effects.csv    Hedges' g、bootstrap、permutation 与题间一致性
+long_experiment_0_audit_spans*.npz        运行前固定少量 audit 题的 float16 span vectors
+
 LONG_EXPERIMENT_1_RESULTS.md              四格表、interaction、progress/length 曲线
 long_experiment_1_span_vectors*.npz       L24/L36 span-last/mean 压缩向量
 long_experiment_1_features.parquet        balanced-LOO query 分数与 selected reference id
@@ -683,9 +1000,11 @@ LONG_EXPERIMENT_3_RESULTS.md              U / WL2 / WE locked evaluation
 long_experiment_3_span_features.parquet   全层 span 级压缩统计
 ```
 
-### 8.3 停止规则
+### 9.3 停止规则
 
 ```text
+实验 0 span-pooled angle 无 SNR/reliability 增益      不进入四格方向主线，保留 amplitude/entropy 负或描述性结果。
+实验 0 仅 activity 有差异、跨 rollout direction 为 null 不进入实验 1；纵向 activity 仅保留为 selector 候选。
 实验 1 pilot 无稳定 I_angle/I_amp              不扩展，记录 long-response 负结果。
 实验 1 扩展有 interaction、实验 2 无条件增量    不做全层；说明它只是 long path/length 的重表达。
 实验 2 有稳定增量                              冻结设计，进入实验 3A/3B。
@@ -696,7 +1015,15 @@ long_experiment_3_span_features.parquet   全层 span 级压缩统计
 
 ---
 
-## 9. 本阶段允许与不允许的结论
+## 10. 本阶段允许与不允许的结论
+
+实验 0 最多支持：
+
+```text
+在固定 long-response setting 中，正确/错误 rollout 的 token-amplitude 与 span-direction dynamics
+是否在特定 layer、relative progress 和 length strata 上存在可重复差异，以及 span pooling 是否提高
+角度类量的稳定性；它不证明这些 activity 或方向差异已经是局部因果 credit。
+```
 
 实验 1/2 最多支持：
 
