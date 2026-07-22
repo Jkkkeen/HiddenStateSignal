@@ -264,14 +264,19 @@ def reduce_rollout_hidden(
     for window, stride in span_specs:
         spans = full_span_bounds(segment_length, window=window, stride=stride)
         if len(spans) < 3:
-            raise ValueError(
-                f"too few spans for mean_w{window}_s{stride}: think_length={segment_length}"
-            )
+            if (window, stride) == primary_spec:
+                raise ValueError(
+                    f"too few primary spans for mean_w{window}_s{stride}: "
+                    f"think_length={segment_length}"
+                )
+            continue
         spans_by_representation[f"mean_w{window}_s{stride}"] = spans
     endpoint_window, endpoint_stride = endpoint_spec
-    spans_by_representation[f"last_w{endpoint_window}_s{endpoint_stride}"] = full_span_bounds(
+    endpoint_spans = full_span_bounds(
         segment_length, window=endpoint_window, stride=endpoint_stride
     )
+    if len(endpoint_spans) >= 3:
+        spans_by_representation[f"last_w{endpoint_window}_s{endpoint_stride}"] = endpoint_spans
     primary_representation = f"mean_w{primary_spec[0]}_s{primary_spec[1]}"
 
     pooled_parts: dict[str, list[np.ndarray]] = {
@@ -498,7 +503,9 @@ def _write_audit_npz(
     if not payloads:
         return
     arrays: dict[str, np.ndarray] = {}
-    representations = sorted(payloads[0].vectors)
+    representations = sorted(
+        {representation for payload in payloads for representation in payload.vectors}
+    )
     for representation in representations:
         safe = representation.replace("-", "_")
         vectors = []
@@ -507,6 +514,8 @@ def _write_audit_npz(
         ends = []
         progress = []
         for payload in payloads:
+            if representation not in payload.vectors:
+                continue
             current = payload.vectors[representation]
             metadata = payload.metadata[representation]
             vectors.append(current)

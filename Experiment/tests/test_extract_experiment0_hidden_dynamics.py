@@ -113,6 +113,27 @@ def test_non_audit_reduction_keeps_vectors_only_for_primary_cross_rollout_geomet
     assert reduced.span_horizontal.loc[~primary, "displacement"].isna().all()
 
 
+def test_short_rollout_skips_unavailable_sensitivity_span_spec() -> None:
+    reduced = reduce_rollout_hidden(
+        _hidden_states(),
+        segment_start=0,
+        segment_end=12,
+        progress_bins=3,
+        span_specs=((4, 2), (10, 5)),
+        endpoint_spec=(4, 2),
+        primary_spec=(4, 2),
+        question_id="q1",
+        rollout_id=0,
+        is_correct=True,
+        think_length=12,
+    )
+
+    assert set(reduced.span_horizontal["representation"]) == {
+        "mean_w4_s2",
+        "last_w4_s2",
+    }
+
+
 def test_question_complete_requires_marker_and_all_parquet_schemas(tmp_path: Path) -> None:
     stem = question_stem("q1")
     (tmp_path / "bin_features").mkdir()
