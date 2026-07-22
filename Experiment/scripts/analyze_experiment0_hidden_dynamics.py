@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -204,6 +205,13 @@ def compare_feature_to_length(
         ["question_id", "rollout_id", "is_correct", "think_length", feature]
     ].dropna()
     view = view.drop_duplicates(["question_id", "rollout_id"], keep="first").reset_index(drop=True)
+    eligible_questions = (
+        view.groupby("question_id", sort=False)["is_correct"]
+        .nunique()
+        .loc[lambda values: values == 2]
+        .index
+    )
+    view = view[view["question_id"].isin(eligible_questions)].reset_index(drop=True)
     n_questions = int(view["question_id"].nunique())
     if n_questions < 2 or view["is_correct"].nunique() < 2:
         return {
@@ -542,6 +550,13 @@ def _scatter_by_correct(
     axis.set_ylabel(y)
     axis.set_title(title)
     axis.grid(alpha=0.2)
+    axis.legend(
+        handles=[
+            Line2D([0], [0], marker="o", linestyle="", color="#167d5a", label="correct"),
+            Line2D([0], [0], marker="o", linestyle="", color="#c04a3f", label="wrong"),
+        ],
+        frameon=True,
+    )
 
 
 def write_figures(
@@ -606,14 +621,23 @@ def write_figures(
     selected_effects = effects.sort_values("abs_hedges_g", ascending=False).dropna(
         subset=["hedges_g"]
     )
-    selected_names = selected_effects["feature"].drop_duplicates().head(4).tolist()
-    if not selected_names:
-        selected_names = ["no_finite_effect"]
-    fig, axes = plt.subplots(
-        len(selected_names), 1, figsize=(9, max(3.2, 3.0 * len(selected_names))), squeeze=False
+    selected_pairs = (
+        selected_effects[["feature", "representation"]]
+        .drop_duplicates()
+        .head(4)
+        .itertuples(index=False, name=None)
     )
-    for axis, feature in zip(axes[:, 0], selected_names):
-        view = effects[effects["feature"] == feature]
+    selected_pairs = list(selected_pairs)
+    if not selected_pairs:
+        selected_pairs = [("no_finite_effect", "none")]
+    fig, axes = plt.subplots(
+        len(selected_pairs), 1, figsize=(9, max(3.2, 3.0 * len(selected_pairs))), squeeze=False
+    )
+    for axis, (feature, representation) in zip(axes[:, 0], selected_pairs):
+        view = effects[
+            (effects["feature"] == feature)
+            & (effects["representation"] == representation)
+        ]
         if view.empty:
             axis.text(0.5, 0.5, "No finite effect", ha="center", va="center")
             axis.axis("off")
@@ -621,7 +645,7 @@ def write_figures(
         pivot = view.pivot_table(index="layer", columns="progress_bin", values="hedges_g")
         bound = max(float(np.nanmax(np.abs(pivot.to_numpy()))), 0.1)
         image = axis.imshow(pivot, aspect="auto", cmap="coolwarm", vmin=-bound, vmax=bound)
-        axis.set_title(feature)
+        axis.set_title(f"{feature} | {representation}")
         axis.set_xlabel("progress bin")
         axis.set_ylabel("hidden-state index")
         axis.set_xticks(range(len(pivot.columns)), pivot.columns)
@@ -680,10 +704,10 @@ def write_figures(
     paths.append(_finish_figure(fig, figure_dir / "E0_F6_length_strata.png"))
 
     top_predictors = predictors.sort_values("feature_only_auc", ascending=False).head(20)
-    fig, axis = plt.subplots(figsize=(10, max(5, len(top_predictors) * 0.35)))
+    fig, axis = plt.subplots(figsize=(12, max(5, len(top_predictors) * 0.35)))
     positions = np.arange(len(top_predictors))
     labels = [
-        f"{row.feature} L{row.layer} B{row.progress_bin}"
+        f"{row.feature} [{row.representation}] L{row.layer} B{row.progress_bin}"
         for row in top_predictors.itertuples()
     ]
     axis.scatter(top_predictors["length_only_auc"], positions, label="length-only", marker="|", s=120)

@@ -54,6 +54,18 @@ def test_length_baseline_uses_identical_rows_and_grouped_oof_predictions() -> No
     assert result["combined_auc"] > result["length_only_auc"]
 
 
+def test_length_baseline_drops_questions_with_one_nonmissing_class() -> None:
+    frame = _predictor_frame(n_questions=3)
+    frame.loc[
+        (frame["question_id"] == "q0") & (~frame["is_correct"]), "feature"
+    ] = np.nan
+
+    result = compare_feature_to_length(frame, feature="feature", seed=7, bootstrap=20)
+
+    assert result["n_questions"] == 2
+    assert result["fold_question_overlap"] == 0
+
+
 def test_gate_requires_both_paired_ci_lower_bounds_above_zero() -> None:
     assert passes_length_gate(0.01, 0.02) is True
     assert passes_length_gate(-0.01, 0.02) is False
