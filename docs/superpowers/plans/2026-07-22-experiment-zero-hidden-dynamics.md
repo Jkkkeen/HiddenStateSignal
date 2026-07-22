@@ -110,7 +110,7 @@ git commit -m "feat: add experiment zero hidden metrics"
 
 **Interfaces:**
 - Consumes: a frozen manifest JSONL and Qwen3-VL processor/model outputs.
-- Produces per question: `bin_features/question_*.parquet`, `span_features/question_*.parquet`, `prototype_diagnostics/question_*.parquet`, `question_*.complete.json`, and optional `audit_spans/question_*.npz`.
+- Produces per question: `bin_features/question_*.parquet`, `span_features/question_*.parquet`, `prototype_diagnostics/question_*.parquet`, L24/L36 scalar-only `pairwise_geometry/question_*.parquet`, `question_*.complete.json`, and optional `audit_spans/question_*.npz`.
 
 - [ ] **Step 1: Write failing tests for online reduction and atomic completeness**
 
@@ -175,7 +175,7 @@ git commit -m "feat: extract all-layer experiment zero dynamics"
 
 **Interfaces:**
 - Consumes: per-question parquet shards from Task 2.
-- Produces: `long_experiment_0_bin_features.parquet`, `long_experiment_0_question_effects.csv`, `long_experiment_0_predictor_comparisons.csv`, and `long_experiment_0_prototype_diagnostics.parquet`.
+- Produces: `long_experiment_0_bin_features.parquet`, `long_experiment_0_question_effects.csv`, `long_experiment_0_predictor_comparisons.csv`, `long_experiment_0_prototype_diagnostics.parquet`, and a permutation null rebuilt from scalar pairwise geometry.
 
 - [ ] **Step 1: Write failing tests for Hedges' g, grouped OOF prediction, and paired deltas**
 

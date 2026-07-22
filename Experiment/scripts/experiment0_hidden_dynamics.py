@@ -265,18 +265,6 @@ def aggregate_token_dynamics(hidden: np.ndarray, progress_bins: int = 10) -> pd.
     return pd.DataFrame(rows)
 
 
-def _nearest_by_rollout(
-    candidates: pd.DataFrame, query_progress: float
-) -> dict[int, pd.Series]:
-    selected: dict[int, pd.Series] = {}
-    for rollout_id, group in candidates.groupby("rollout_id", sort=True):
-        ordered = group.assign(
-            _distance=(group["relative_progress"] - query_progress).abs()
-        ).sort_values(["_distance", "span_id"], kind="stable")
-        selected[int(rollout_id)] = ordered.iloc[0]
-    return selected
-
-
 def score_cross_rollout_queries(
     records: pd.DataFrame,
     kappa_min: float = 0.20,
@@ -301,28 +289,64 @@ def score_cross_rollout_queries(
     score_rows: list[dict[str, Any]] = []
     diagnostic_rows: list[dict[str, Any]] = []
     group_columns = ["question_id", "representation", "layer", "progress_bin"]
-    for _, group in records.groupby(group_columns, sort=True, dropna=False):
-        label_by_rollout = (
-            group.groupby("rollout_id", sort=True)["is_correct"].first().astype(bool).to_dict()
-        )
-        for _, query in group.sort_values(["rollout_id", "span_id"]).iterrows():
+    for _, raw_group in records.groupby(group_columns, sort=True, dropna=False):
+        group = raw_group.sort_values(
+            ["rollout_id", "relative_progress", "span_id"], kind="stable"
+        ).reset_index(drop=True)
+        rollout_ids = group["rollout_id"].to_numpy(dtype=np.int64)
+        progress = group["relative_progress"].to_numpy(dtype=np.float64)
+        vectors = np.stack(group["displacement"].to_numpy()).astype(np.float64, copy=False)
+        norms = group["displacement_norm"].to_numpy(dtype=np.float64)
+        scalar_records = group.drop(columns=["displacement"]).to_dict("records")
+        indices_by_rollout = {
+            int(rollout_id): np.flatnonzero(rollout_ids == rollout_id)
+            for rollout_id in np.unique(rollout_ids)
+        }
+        label_by_rollout = {
+            rollout_id: bool(group.iloc[indices[0]]["is_correct"])
+            for rollout_id, indices in indices_by_rollout.items()
+        }
+        subsets_by_rollout = {
+            rollout_id: balanced_reference_subsets(label_by_rollout, rollout_id)
+            for rollout_id in indices_by_rollout
+        }
+        positive_available_by_rollout = {
+            rollout_id: sum(
+                label for reference_id, label in label_by_rollout.items() if reference_id != rollout_id
+            )
+            for rollout_id in indices_by_rollout
+        }
+        negative_available_by_rollout = {
+            rollout_id: sum(
+                not label
+                for reference_id, label in label_by_rollout.items()
+                if reference_id != rollout_id
+            )
+            for rollout_id in indices_by_rollout
+        }
+        for query_index, query in enumerate(scalar_records):
             query_id = int(query["rollout_id"])
-            candidates = group[group["rollout_id"] != query_id]
-            nearest = _nearest_by_rollout(candidates, float(query["relative_progress"]))
-            active_labels = {query_id: label_by_rollout[query_id]}
-            active_labels.update({rid: label_by_rollout[rid] for rid in nearest})
-            subsets = balanced_reference_subsets(active_labels, query_id)
+            subsets = subsets_by_rollout[query_id]
+            nearest_index: dict[int, int] = {}
+            query_progress = progress[query_index]
+            for reference_id, indices in indices_by_rollout.items():
+                if reference_id == query_id:
+                    continue
+                distances = np.abs(progress[indices] - query_progress)
+                nearest_index[reference_id] = int(indices[int(np.argmin(distances))])
             subset_scores: list[dict[str, float]] = []
-            query_vector = np.asarray(query["displacement"], dtype=np.float64)
-            query_norm = float(np.linalg.norm(query_vector))
+            query_vector = vectors[query_index]
+            query_norm = float(norms[query_index])
             query_unit = query_vector / max(query_norm, eps)
             for subset_id, (positive_ids, negative_ids) in enumerate(subsets):
-                positive_vectors = np.stack(
-                    [np.asarray(nearest[rid]["displacement"], dtype=np.float64) for rid in positive_ids]
+                positive_indices = np.asarray(
+                    [nearest_index[reference_id] for reference_id in positive_ids], dtype=np.int64
                 )
-                negative_vectors = np.stack(
-                    [np.asarray(nearest[rid]["displacement"], dtype=np.float64) for rid in negative_ids]
+                negative_indices = np.asarray(
+                    [nearest_index[reference_id] for reference_id in negative_ids], dtype=np.int64
                 )
+                positive_vectors = vectors[positive_indices]
+                negative_vectors = vectors[negative_indices]
                 positive_units = _unit_rows(positive_vectors, eps)
                 negative_units = _unit_rows(negative_vectors, eps)
                 positive_similarity = float(np.max(positive_units @ query_unit))
@@ -340,12 +364,8 @@ def score_cross_rollout_queries(
                         np.dot(query_unit, positive_centroid)
                         - np.dot(query_unit, negative_centroid)
                     )
-                positive_lengths = np.asarray(
-                    [float(nearest[rid]["displacement_norm"]) for rid in positive_ids]
-                )
-                negative_lengths = np.asarray(
-                    [float(nearest[rid]["displacement_norm"]) for rid in negative_ids]
-                )
+                positive_lengths = norms[positive_indices]
+                negative_lengths = norms[negative_indices]
                 positive_center = float(np.exp(np.mean(np.log(positive_lengths + eps))))
                 negative_center = float(np.exp(np.mean(np.log(negative_lengths + eps))))
                 length_support = float(
@@ -388,11 +408,7 @@ def score_cross_rollout_queries(
                 continue
             subset_frame = pd.DataFrame(subset_scores)
             valid_proto = subset_frame["prototype_direction"].dropna()
-            base = {
-                key: query[key]
-                for key in query.index
-                if key not in {"displacement"}
-            }
+            base = dict(query)
             base.update(
                 {
                     "cross_set_direction": float(subset_frame["set_direction"].mean()),
@@ -409,12 +425,170 @@ def score_cross_rollout_queries(
                     "reference_rollout_count_pos": int(len(subsets[0][0])),
                     "reference_rollout_count_neg": int(len(subsets[0][1])),
                     "available_reference_rollout_count_pos": int(
-                        sum(bool(value) for rid, value in active_labels.items() if rid != query_id)
+                        positive_available_by_rollout[query_id]
                     ),
                     "available_reference_rollout_count_neg": int(
-                        sum(not bool(value) for rid, value in active_labels.items() if rid != query_id)
+                        negative_available_by_rollout[query_id]
                     ),
                 }
             )
             score_rows.append(base)
     return pd.DataFrame(score_rows), pd.DataFrame(diagnostic_rows)
+
+
+def build_pairwise_geometry(
+    records: pd.DataFrame,
+    layers: tuple[int, ...] | None = (24, 36),
+    eps: float = EPS,
+) -> pd.DataFrame:
+    """Persist scalar nearest-reference geometry for leakage-safe label permutations."""
+    required = {
+        "question_id",
+        "rollout_id",
+        "is_correct",
+        "representation",
+        "span_id",
+        "relative_progress",
+        "progress_bin",
+        "layer",
+        "displacement",
+        "displacement_norm",
+    }
+    missing = required.difference(records.columns)
+    if missing:
+        raise ValueError(f"missing pairwise geometry columns: {sorted(missing)}")
+    view = records if layers is None else records[records["layer"].isin(layers)]
+    rows: list[dict[str, Any]] = []
+    group_columns = ["question_id", "representation", "layer", "progress_bin"]
+    for _, raw_group in view.groupby(group_columns, sort=True, dropna=False):
+        group = raw_group.sort_values(
+            ["rollout_id", "relative_progress", "span_id"], kind="stable"
+        ).reset_index(drop=True)
+        rollout_ids = group["rollout_id"].to_numpy(dtype=np.int64)
+        progress = group["relative_progress"].to_numpy(dtype=np.float64)
+        vectors = np.stack(group["displacement"].to_numpy()).astype(np.float64, copy=False)
+        units = _unit_rows(vectors, eps)
+        norms = group["displacement_norm"].to_numpy(dtype=np.float64)
+        indices_by_rollout = {
+            int(rollout_id): np.flatnonzero(rollout_ids == rollout_id)
+            for rollout_id in np.unique(rollout_ids)
+        }
+        scalar_records = group.drop(columns=["displacement"]).to_dict("records")
+        for query_index, query in enumerate(scalar_records):
+            query_id = int(query["rollout_id"])
+            for reference_id, indices in indices_by_rollout.items():
+                if reference_id == query_id:
+                    continue
+                distances = np.abs(progress[indices] - progress[query_index])
+                reference_index = int(indices[int(np.argmin(distances))])
+                rows.append(
+                    {
+                        **query,
+                        "reference_rollout_id": int(reference_id),
+                        "reference_is_correct": bool(
+                            scalar_records[reference_index]["is_correct"]
+                        ),
+                        "reference_span_id": int(
+                            scalar_records[reference_index]["span_id"]
+                        ),
+                        "reference_progress": float(progress[reference_index]),
+                        "reference_norm": float(norms[reference_index]),
+                        "cosine_similarity": float(
+                            np.dot(units[query_index], units[reference_index])
+                        ),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def score_set_direction_from_geometry(
+    geometry: pd.DataFrame,
+    label_overrides: dict[tuple[str, int], bool] | None = None,
+    eps: float = EPS,
+) -> pd.DataFrame:
+    """Rebuild balanced reference scores from scalar geometry under new labels."""
+    required = {
+        "question_id",
+        "rollout_id",
+        "is_correct",
+        "representation",
+        "span_id",
+        "relative_progress",
+        "progress_bin",
+        "layer",
+        "displacement_norm",
+        "reference_rollout_id",
+        "reference_is_correct",
+        "reference_norm",
+        "cosine_similarity",
+    }
+    missing = required.difference(geometry.columns)
+    if missing:
+        raise ValueError(f"missing scalar geometry columns: {sorted(missing)}")
+    label_overrides = label_overrides or {}
+    rows: list[dict[str, Any]] = []
+    query_columns = [
+        "question_id",
+        "rollout_id",
+        "representation",
+        "span_id",
+        "relative_progress",
+        "progress_bin",
+        "layer",
+    ]
+    for keys, group in geometry.groupby(query_columns, sort=True, observed=True):
+        question_id = str(keys[0])
+        query_id = int(keys[1])
+        query_label = label_overrides.get(
+            (question_id, query_id), bool(group.iloc[0]["is_correct"])
+        )
+        label_by_rollout = {query_id: query_label}
+        for row in group.itertuples():
+            reference_id = int(row.reference_rollout_id)
+            label_by_rollout[reference_id] = label_overrides.get(
+                (question_id, reference_id), bool(row.reference_is_correct)
+            )
+        subsets = balanced_reference_subsets(label_by_rollout, query_id)
+        if not subsets:
+            continue
+        reference = group.set_index("reference_rollout_id", verify_integrity=True)
+        set_scores = []
+        length_scores = []
+        query_norm = float(group.iloc[0]["displacement_norm"])
+        for positive_ids, negative_ids in subsets:
+            positive = reference.loc[list(positive_ids)]
+            negative = reference.loc[list(negative_ids)]
+            set_scores.append(
+                float(
+                    positive["cosine_similarity"].max()
+                    - negative["cosine_similarity"].max()
+                )
+            )
+            positive_center = float(
+                np.exp(np.mean(np.log(positive["reference_norm"].to_numpy() + eps)))
+            )
+            negative_center = float(
+                np.exp(np.mean(np.log(negative["reference_norm"].to_numpy() + eps)))
+            )
+            length_scores.append(
+                float(
+                    abs(np.log(query_norm + eps) - np.log(negative_center + eps))
+                    - abs(np.log(query_norm + eps) - np.log(positive_center + eps))
+                )
+            )
+        base = group.iloc[0].drop(
+            labels=[
+                "reference_rollout_id",
+                "reference_is_correct",
+                "reference_span_id",
+                "reference_progress",
+                "reference_norm",
+                "cosine_similarity",
+            ]
+        ).to_dict()
+        base["is_correct"] = bool(query_label)
+        base["cross_set_direction"] = float(np.mean(set_scores))
+        base["cross_length_support"] = float(np.mean(length_scores))
+        base["balanced_subset_count"] = int(len(subsets))
+        rows.append(base)
+    return pd.DataFrame(rows)

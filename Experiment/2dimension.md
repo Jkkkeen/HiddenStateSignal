@@ -658,6 +658,11 @@ think_length / token_count / span_count / segment status
 不永久保存完整 `[T,L,d]` token hidden。为了复核数值，仅允许固定少量 audit questions 保存 float16 span
 vectors；audit 题必须在运行前确定，不能根据效果大小挑选。
 
+为满足题内 label permutation 必须重建 reference geometry 的要求，只在预声明的 L24/L36、主规格
+`mean_w128_s64` 上永久保存 query-reference 的最近进度标量几何：`cosine_similarity`、query/reference
+movement norm、reference rollout/span id 与 `rho`。该表不含 hidden vector；每次 permutation 都先重分配
+rollout label，再由这些标量重新构造 balanced subsets、`D_set-dir` 和 `D_length`，不能交换最终 score 标签。
+
 ### 5.7 可视化、SNR 检验与统计口径
 
 实验 0 的主图不是单一 AUC 排名，而是 correct/wrong dynamics atlas：
@@ -697,6 +702,11 @@ questions 学习，不能在测试题上把 AUC 事后翻转，也不能为每�
 `Delta AUC`。signed `g_length` 必须报告，`|g_length|` 作为 absolute effect-size 图的固定水平参照线：只有
 feature-only 跑赢 length-only，才能称为更强的 standalone signal；只有 feature+length 跑赢 length-only，
 才能称为包含超出回答长度的增量信息。
+
+全层所有 grid 都报告 Hedges' `g` atlas；为避免对约两万个明显无信号的 grid 重复拟合，predictor 比较先在
+每个 `feature × representation` 内按 discovery `|g|` 固定 top-3 `layer × progress-bin` 候选，再对这三个
+候选运行完全相同的 outer folds。该 top-3 排序是 discovery-only 且存在选择偏差；进入后续 locked evaluation
+前必须冻结唯一 layer/bin，不能把 discovery predictor AUC 当 confirmatory 数字。
 
 此外，所有 feature 至少控制 `think_length`、有效 token/span 数、mean hidden/update norm、relative progress
 和 layer scale。题内 label permutation 必须重新计算 correct/wrong reference geometry，不能只在最终表上交换标签。
@@ -1042,6 +1052,8 @@ LONG_EXPERIMENT_0_RESULTS.md              多分辨率 dynamics atlas、SNR、pr
 long_experiment_0_bin_features.parquet    question × rollout × bin × layer 标量
 long_experiment_0_question_effects.csv    Hedges' g、bootstrap、permutation 与题间一致性
 long_experiment_0_prototype_diagnostics.parquet  balanced subset × query 的 kappa+/-、gate 与有效率
+long_experiment_0_pairwise_geometry.parquet  L24/L36 query-reference cosine/norm 标量，不含 hidden vector
+long_experiment_0_permutation_null.csv     重建 balanced reference geometry 后的题内 label-permutation null
 long_experiment_0_audit_spans*.npz        运行前固定少量 audit 题的 float16 span vectors
 
 LONG_EXPERIMENT_1_RESULTS.md              四格表、interaction、progress/length 曲线

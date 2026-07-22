@@ -14,6 +14,7 @@ from analyze_experiment0_hidden_dynamics import (
     hedges_g,
     main,
     passes_length_gate,
+    run_geometry_permutations,
 )
 
 
@@ -59,11 +60,45 @@ def test_gate_requires_both_paired_ci_lower_bounds_above_zero() -> None:
     assert passes_length_gate(0.01, -0.02) is False
 
 
+def test_geometry_permutation_rebuilds_reference_scores() -> None:
+    rows = []
+    labels = {0: True, 1: True, 2: True, 3: False, 4: False, 5: False}
+    for query_id, query_label in labels.items():
+        for reference_id, reference_label in labels.items():
+            if reference_id == query_id:
+                continue
+            rows.append(
+                {
+                    "question_id": "q1",
+                    "rollout_id": query_id,
+                    "is_correct": query_label,
+                    "representation": "mean_w128_s64",
+                    "span_id": 1,
+                    "relative_progress": 0.5,
+                    "progress_bin": 5,
+                    "layer": 24,
+                    "displacement_norm": 1.0,
+                    "reference_rollout_id": reference_id,
+                    "reference_is_correct": reference_label,
+                    "reference_span_id": 1,
+                    "reference_progress": 0.5,
+                    "reference_norm": 1.0,
+                    "cosine_similarity": 0.9 if query_label == reference_label else 0.1,
+                }
+            )
+    nulls = run_geometry_permutations(pd.DataFrame(rows), permutations=3, seed=9)
+
+    assert set(nulls["permutation_id"]) == {0, 1, 2}
+    assert set(nulls["feature"]) == {"cross_set_direction", "cross_length_support"}
+    assert nulls["geometry_recomputed"].all()
+
+
 def _write_synthetic_question(input_dir: Path, question_index: int) -> None:
     question_id = f"q{question_index}"
     token_rows = []
     span_rows = []
     prototype_rows = []
+    geometry_rows = []
     rng = np.random.default_rng(question_index)
     for rollout_id in range(6):
         correct = rollout_id < 3
@@ -132,18 +167,49 @@ def _write_synthetic_question(input_dir: Path, question_index: int) -> None:
                     "prototype_valid_030": True,
                 }
             )
+            for reference_id in range(6):
+                if reference_id == rollout_id:
+                    continue
+                reference_correct = reference_id < 3
+                geometry_rows.append(
+                    {
+                        "question_id": question_id,
+                        "rollout_id": rollout_id,
+                        "is_correct": correct,
+                        "representation": "mean_w128_s64",
+                        "span_id": 1,
+                        "relative_progress": 0.5,
+                        "progress_bin": 0,
+                        "layer": layer,
+                        "displacement_norm": 1.0,
+                        "reference_rollout_id": reference_id,
+                        "reference_is_correct": reference_correct,
+                        "reference_span_id": 1,
+                        "reference_progress": 0.5,
+                        "reference_norm": 1.0,
+                        "cosine_similarity": 0.9 if correct == reference_correct else 0.1,
+                    }
+                )
     stem = f"question_{question_id}"
     pd.DataFrame(token_rows).to_parquet(input_dir / "bin_features" / f"{stem}.parquet")
     pd.DataFrame(span_rows).to_parquet(input_dir / "span_features" / f"{stem}.parquet")
     pd.DataFrame(prototype_rows).to_parquet(
         input_dir / "prototype_diagnostics" / f"{stem}.parquet"
     )
+    pd.DataFrame(geometry_rows).to_parquet(
+        input_dir / "pairwise_geometry" / f"{stem}.parquet"
+    )
 
 
 def test_analyzer_writes_all_declared_outputs(tmp_path: Path, monkeypatch) -> None:
     input_dir = tmp_path / "extraction"
     output_dir = tmp_path / "results"
-    for directory in ("bin_features", "span_features", "prototype_diagnostics"):
+    for directory in (
+        "bin_features",
+        "span_features",
+        "prototype_diagnostics",
+        "pairwise_geometry",
+    ):
         (input_dir / directory).mkdir(parents=True)
     for question_index in range(6):
         _write_synthetic_question(input_dir, question_index)
@@ -158,6 +224,8 @@ def test_analyzer_writes_all_declared_outputs(tmp_path: Path, monkeypatch) -> No
             str(output_dir),
             "--bootstrap",
             "20",
+            "--permutations",
+            "2",
             "--run-label",
             "Synthetic Smoke",
         ],
@@ -171,6 +239,8 @@ def test_analyzer_writes_all_declared_outputs(tmp_path: Path, monkeypatch) -> No
         "long_experiment_0_question_effects.csv",
         "long_experiment_0_predictor_comparisons.csv",
         "long_experiment_0_prototype_diagnostics.parquet",
+        "long_experiment_0_pairwise_geometry.parquet",
+        "long_experiment_0_permutation_null.csv",
         "analysis_meta.json",
         "figures/E0_F1_horizontal_length_angle.png",
         "figures/E0_F2_cross_rollout_support.png",

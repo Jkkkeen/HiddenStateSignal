@@ -118,6 +118,7 @@ def test_question_complete_requires_marker_and_all_parquet_schemas(tmp_path: Pat
     (tmp_path / "bin_features").mkdir()
     (tmp_path / "span_features").mkdir()
     (tmp_path / "prototype_diagnostics").mkdir()
+    (tmp_path / "pairwise_geometry").mkdir()
     (tmp_path / "completed").mkdir()
     marker = tmp_path / "completed" / f"{stem}.complete.json"
     marker.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
@@ -151,6 +152,24 @@ def test_question_complete_requires_marker_and_all_parquet_schemas(tmp_path: Pat
             }
         ]
     ).to_parquet(tmp_path / "prototype_diagnostics" / f"{stem}.parquet", index=False)
+
+    assert valid_completed_question(tmp_path, stem) is False
+
+    pd.DataFrame(
+        [
+            {
+                "question_id": "q1",
+                "rollout_id": 0,
+                "representation": "mean_w4_s2",
+                "progress_bin": 0,
+                "layer": 0,
+                "span_id": 1,
+                "reference_rollout_id": 1,
+                "reference_norm": 1.0,
+                "cosine_similarity": 0.5,
+            }
+        ]
+    ).to_parquet(tmp_path / "pairwise_geometry" / f"{stem}.parquet", index=False)
 
     assert valid_completed_question(tmp_path, stem) is True
 

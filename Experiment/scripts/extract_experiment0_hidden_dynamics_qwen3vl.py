@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from experiment0_hidden_dynamics import (
+    build_pairwise_geometry,
     build_span_direction_records,
     score_cross_rollout_queries,
 )
@@ -41,6 +43,12 @@ SPAN_REQUIRED_COLUMNS = {
     "layer",
 }
 PROTOTYPE_REQUIRED_COLUMNS = SPAN_REQUIRED_COLUMNS | {"kappa_pos", "kappa_neg"}
+GEOMETRY_REQUIRED_COLUMNS = SPAN_REQUIRED_COLUMNS | {
+    "span_id",
+    "reference_rollout_id",
+    "reference_norm",
+    "cosine_similarity",
+}
 
 
 @dataclass
@@ -144,6 +152,10 @@ def valid_completed_question(output_dir: Path, stem: str) -> bool:
         and _frame_has_columns(
             output_dir / "prototype_diagnostics" / f"{stem}.parquet",
             PROTOTYPE_REQUIRED_COLUMNS,
+        )
+        and _frame_has_columns(
+            output_dir / "pairwise_geometry" / f"{stem}.parquet",
+            GEOMETRY_REQUIRED_COLUMNS,
         )
     )
 
@@ -526,7 +538,7 @@ def extract_question(
     primary_spec: tuple[int, int],
     kappa_min: float,
     retain_audit_vectors: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[AuditRollout]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[AuditRollout]]:
     import torch
 
     token_frames = []
@@ -534,7 +546,9 @@ def extract_question(
     primary_horizontal_frames = []
     audit_payloads: list[AuditRollout] = []
     label_by_rollout: dict[int, bool] = {}
+    question_started = time.monotonic()
     for row in sorted(rows, key=lambda item: int(item.get("rollout_id", -1))):
+        rollout_started = time.monotonic()
         prompt_inputs = encode_messages(
             processor, build_prompt_messages(row), add_generation_prompt=True
         )
@@ -593,6 +607,20 @@ def extract_question(
                     metadata=reduced.audit_metadata,
                 )
             )
+        print(
+            json.dumps(
+                {
+                    "event": "rollout_reduced",
+                    "question_id": question_id,
+                    "rollout_id": rollout_id,
+                    "think_length": segment_length,
+                    "layers": len(outputs.hidden_states),
+                    "seconds": round(time.monotonic() - rollout_started, 3),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
         del outputs, full_inputs, prompt_inputs, reduced
         gc.collect()
         if torch.cuda.is_available():
@@ -607,6 +635,20 @@ def extract_question(
     primary_horizontal = pd.concat(primary_horizontal_frames, ignore_index=True)
     cross_scores, prototype_diagnostics = score_cross_rollout_queries(
         primary_horizontal, kappa_min=kappa_min
+    )
+    pairwise_geometry = build_pairwise_geometry(primary_horizontal, layers=(24, 36))
+    print(
+        json.dumps(
+            {
+                "event": "question_geometry_scored",
+                "question_id": question_id,
+                "queries": len(cross_scores),
+                "prototype_rows": len(prototype_diagnostics),
+                "seconds": round(time.monotonic() - question_started, 3),
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
     )
     span_features = pd.concat(span_aggregate_frames, ignore_index=True)
     cross_aggregate = aggregate_cross_features(cross_scores)
@@ -627,6 +669,7 @@ def extract_question(
         pd.concat(token_frames, ignore_index=True),
         span_features,
         prototype_diagnostics,
+        pairwise_geometry,
         audit_payloads,
     )
 
@@ -654,6 +697,7 @@ def main() -> None:
         "bin_features",
         "span_features",
         "prototype_diagnostics",
+        "pairwise_geometry",
         "audit_spans",
         "completed",
     ):
@@ -694,7 +738,7 @@ def main() -> None:
             counts["resumed"] += 1
             continue
         try:
-            token_frame, span_frame, prototype_frame, audit_payloads = extract_question(
+            token_frame, span_frame, prototype_frame, geometry_frame, audit_payloads = extract_question(
                 question_id,
                 grouped[question_id],
                 processor=processor,
@@ -714,6 +758,10 @@ def main() -> None:
                 prototype_frame,
                 output_dir / "prototype_diagnostics" / f"{stem}.parquet",
             )
+            _atomic_parquet(
+                geometry_frame,
+                output_dir / "pairwise_geometry" / f"{stem}.parquet",
+            )
             if audit_payloads:
                 _write_audit_npz(output_dir / "audit_spans" / f"{stem}.npz", audit_payloads)
             marker = output_dir / "completed" / f"{stem}.complete.json"
@@ -726,6 +774,7 @@ def main() -> None:
                 "token_rows": int(len(token_frame)),
                 "span_rows": int(len(span_frame)),
                 "prototype_rows": int(len(prototype_frame)),
+                "geometry_rows": int(len(geometry_frame)),
             }
             temporary_marker.write_text(
                 json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"

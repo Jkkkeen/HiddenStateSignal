@@ -12,11 +12,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from experiment0_hidden_dynamics import (
     aggregate_token_dynamics,
+    build_pairwise_geometry,
     build_span_direction_records,
     coordinate_energy_entropy,
     pool_span_vectors,
     prototype_shrinkage,
     score_cross_rollout_queries,
+    score_set_direction_from_geometry,
 )
 
 
@@ -129,6 +131,27 @@ def test_cross_rollout_selects_one_nearest_span_per_reference_rollout() -> None:
     assert query["reference_rollout_count_neg"] == 2
     assert len(subset["positive_reference_ids"].split(",")) == 2
     assert len(subset["negative_reference_ids"].split(",")) == 2
+
+
+def test_pairwise_geometry_reproduces_set_direction_and_uses_nearest_span() -> None:
+    records = _synthetic_cross_records()
+    direct, _ = score_cross_rollout_queries(records)
+    geometry = build_pairwise_geometry(records, layers=(1,))
+    rescored = score_set_direction_from_geometry(geometry)
+
+    assert len(geometry) == len(records) * 5
+    query_geometry = geometry[(geometry["rollout_id"] == 0) & (geometry["span_id"] == 0)]
+    assert query_geometry["reference_span_id"].eq(0).all()
+    keys = ["rollout_id", "span_id", "layer", "progress_bin"]
+    compared = direct.merge(rescored, on=keys, suffixes=("_direct", "_geometry"))
+    np.testing.assert_allclose(
+        compared["cross_set_direction_direct"],
+        compared["cross_set_direction_geometry"],
+    )
+    np.testing.assert_allclose(
+        compared["cross_length_support_direct"],
+        compared["cross_length_support_geometry"],
+    )
 
 
 def test_aggregate_token_dynamics_emits_horizontal_vertical_and_entropy() -> None:

@@ -19,6 +19,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from experiment0_hidden_dynamics import score_set_direction_from_geometry
 from long_success_trajectory_common import length_bin, pairwise_auc
 
 
@@ -60,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--primary-representation", default=PRIMARY_REPRESENTATION)
     parser.add_argument("--bootstrap", type=int, default=1000)
+    parser.add_argument("--permutations", type=int, default=100)
+    parser.add_argument("--predictor-candidates-per-feature", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20260721)
     parser.add_argument("--run-label", default="Smoke")
     return parser.parse_args()
@@ -89,34 +92,57 @@ def _cluster_bootstrap_g(
     bootstrap: int,
     seed: int,
 ) -> tuple[float, float]:
-    question_groups = {
-        str(question_id): group for question_id, group in frame.groupby("question_id", sort=True)
-    }
-    question_ids = np.asarray(sorted(question_groups), dtype=object)
-    if question_ids.size < 2 or bootstrap <= 0:
+    sufficient = []
+    for _, group in frame.groupby("question_id", sort=True):
+        positive = group.loc[group["is_correct"], feature].to_numpy(dtype=np.float64)
+        negative = group.loc[~group["is_correct"], feature].to_numpy(dtype=np.float64)
+        positive = positive[np.isfinite(positive)]
+        negative = negative[np.isfinite(negative)]
+        sufficient.append(
+            (
+                positive.size,
+                positive.sum(),
+                np.square(positive).sum(),
+                negative.size,
+                negative.sum(),
+                np.square(negative).sum(),
+            )
+        )
+    stats = np.asarray(sufficient, dtype=np.float64)
+    if stats.shape[0] < 2 or bootstrap <= 0:
         return float("nan"), float("nan")
     rng = np.random.default_rng(seed)
-    samples = []
-    for _ in range(bootstrap):
-        selected = rng.choice(question_ids, size=question_ids.size, replace=True)
-        positive = np.concatenate(
-            [
-                question_groups[str(question)].loc[
-                    question_groups[str(question)]["is_correct"], feature
-                ].to_numpy(dtype=np.float64)
-                for question in selected
-            ]
-        )
-        negative = np.concatenate(
-            [
-                question_groups[str(question)].loc[
-                    ~question_groups[str(question)]["is_correct"], feature
-                ].to_numpy(dtype=np.float64)
-                for question in selected
-            ]
-        )
-        samples.append(hedges_g(positive, negative))
-    finite = np.asarray(samples, dtype=np.float64)
+    selected = rng.integers(0, stats.shape[0], size=(bootstrap, stats.shape[0]))
+    sampled = stats[selected].sum(axis=1)
+    n_positive, sum_positive, square_positive = sampled[:, 0:3].T
+    n_negative, sum_negative, square_negative = sampled[:, 3:6].T
+    mean_positive = sum_positive / np.maximum(n_positive, 1)
+    mean_negative = sum_negative / np.maximum(n_negative, 1)
+    variance_positive = (
+        square_positive - np.square(sum_positive) / np.maximum(n_positive, 1)
+    ) / np.maximum(n_positive - 1, 1)
+    variance_negative = (
+        square_negative - np.square(sum_negative) / np.maximum(n_negative, 1)
+    ) / np.maximum(n_negative - 1, 1)
+    degrees = n_positive + n_negative - 2
+    pooled_variance = (
+        (n_positive - 1) * variance_positive + (n_negative - 1) * variance_negative
+    ) / np.maximum(degrees, 1)
+    correction = 1.0 - 3.0 / np.maximum(4.0 * (n_positive + n_negative) - 9.0, 1.0)
+    numerator = correction * (mean_positive - mean_negative)
+    samples = np.divide(
+        numerator,
+        np.sqrt(np.maximum(pooled_variance, 0.0)),
+        out=np.full_like(numerator, np.nan),
+        where=pooled_variance > 0,
+    )
+    valid = (
+        (n_positive >= 2)
+        & (n_negative >= 2)
+        & (pooled_variance > 0)
+        & np.isfinite(samples)
+    )
+    finite = samples[valid]
     finite = finite[np.isfinite(finite)]
     if finite.size == 0:
         return float("nan"), float("nan")
@@ -326,31 +352,42 @@ def compute_effect_table(
 
 def compute_predictor_table(
     features: pd.DataFrame,
+    effects: pd.DataFrame,
     bootstrap: int,
     seed: int,
+    candidates_per_feature: int,
 ) -> pd.DataFrame:
+    if candidates_per_feature <= 0:
+        raise ValueError("candidates_per_feature must be positive")
+    candidates = (
+        effects.dropna(subset=["abs_hedges_g"])
+        .sort_values("abs_hedges_g", ascending=False)
+        .groupby(["feature", "representation"], as_index=False, observed=True)
+        .head(candidates_per_feature)
+    )
     rows = []
     offset = 0
-    for feature in ALL_FEATURES:
-        if feature not in features.columns:
-            continue
-        available = features.dropna(subset=[feature])
-        for keys, group in available.groupby(
-            ["representation", "layer", "progress_bin"], sort=True, observed=True
-        ):
-            result = compare_feature_to_length(
-                group, feature=feature, seed=seed + offset, bootstrap=bootstrap
-            )
-            rows.append(
-                {
-                    "feature": feature,
-                    "representation": keys[0],
-                    "layer": int(keys[1]),
-                    "progress_bin": int(keys[2]),
-                    **result,
-                }
-            )
-            offset += 1
+    for candidate in candidates.itertuples():
+        feature = str(candidate.feature)
+        group = features[
+            (features["representation"] == candidate.representation)
+            & (features["layer"] == candidate.layer)
+            & (features["progress_bin"] == candidate.progress_bin)
+        ].dropna(subset=[feature])
+        result = compare_feature_to_length(
+            group, feature=feature, seed=seed + offset, bootstrap=bootstrap
+        )
+        rows.append(
+            {
+                "feature": feature,
+                "representation": candidate.representation,
+                "layer": int(candidate.layer),
+                "progress_bin": int(candidate.progress_bin),
+                "selection_abs_hedges_g": float(candidate.abs_hedges_g),
+                **result,
+            }
+        )
+        offset += 1
     return pd.DataFrame(rows)
 
 
@@ -375,6 +412,107 @@ def compute_length_effect(
         "n_questions": int(rollouts["question_id"].nunique()),
         "n_rollouts": int(len(rollouts)),
     }
+
+
+def run_geometry_permutations(
+    geometry: pd.DataFrame,
+    permutations: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Permute rollout labels and rebuild balanced reference scores from geometry."""
+    if permutations <= 0:
+        return pd.DataFrame(
+            columns=[
+                "permutation_id",
+                "feature",
+                "representation",
+                "layer",
+                "progress_bin",
+                "hedges_g",
+                "geometry_recomputed",
+            ]
+        )
+    label_rows = geometry[
+        ["question_id", "rollout_id", "is_correct"]
+    ].drop_duplicates(["question_id", "rollout_id"])
+    labels_by_question = {
+        str(question_id): group.sort_values("rollout_id")
+        for question_id, group in label_rows.groupby("question_id", sort=True)
+    }
+    rng = np.random.default_rng(seed)
+    rows = []
+    for permutation_id in range(permutations):
+        overrides: dict[tuple[str, int], bool] = {}
+        for question_id, group in labels_by_question.items():
+            shuffled = rng.permutation(group["is_correct"].to_numpy(dtype=bool))
+            overrides.update(
+                {
+                    (question_id, int(rollout_id)): bool(label)
+                    for rollout_id, label in zip(group["rollout_id"], shuffled)
+                }
+            )
+        rescored = score_set_direction_from_geometry(geometry, label_overrides=overrides)
+        rollout_scores = (
+            rescored.groupby(
+                [
+                    "question_id",
+                    "rollout_id",
+                    "is_correct",
+                    "representation",
+                    "layer",
+                    "progress_bin",
+                ],
+                as_index=False,
+                observed=True,
+            )
+            .agg(
+                cross_set_direction=("cross_set_direction", "mean"),
+                cross_length_support=("cross_length_support", "mean"),
+            )
+        )
+        for keys, group in rollout_scores.groupby(
+            ["representation", "layer", "progress_bin"], sort=True, observed=True
+        ):
+            for feature in ("cross_set_direction", "cross_length_support"):
+                rows.append(
+                    {
+                        "permutation_id": int(permutation_id),
+                        "feature": feature,
+                        "representation": keys[0],
+                        "layer": int(keys[1]),
+                        "progress_bin": int(keys[2]),
+                        "hedges_g": hedges_g(
+                            group.loc[group["is_correct"], feature].to_numpy(),
+                            group.loc[~group["is_correct"], feature].to_numpy(),
+                        ),
+                        "geometry_recomputed": True,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def add_permutation_pvalues(
+    effects: pd.DataFrame, nulls: pd.DataFrame
+) -> pd.DataFrame:
+    result = effects.copy()
+    result["permutation_p"] = np.nan
+    if nulls.empty:
+        return result
+    key_columns = ["feature", "representation", "layer", "progress_bin"]
+    null_groups = {
+        tuple(keys): group["hedges_g"].dropna().to_numpy(dtype=np.float64)
+        for keys, group in nulls.groupby(key_columns, sort=False, observed=True)
+    }
+    for index, row in result.iterrows():
+        key = tuple(row[column] for column in key_columns)
+        null_values = null_groups.get(key, np.asarray([]))
+        observed = float(row["hedges_g"])
+        if null_values.size and np.isfinite(observed):
+            result.loc[index, "permutation_p"] = float(
+                (1 + np.sum(np.abs(null_values) >= abs(observed)))
+                / (1 + null_values.size)
+            )
+    return result
 
 
 def _sample(frame: pd.DataFrame, maximum: int, seed: int) -> pd.DataFrame:
@@ -571,6 +709,7 @@ def write_report(
     effects: pd.DataFrame,
     predictors: pd.DataFrame,
     length_effect: dict[str, Any],
+    permutation_nulls: pd.DataFrame,
     figures: Iterable[Path],
 ) -> Path:
     path = output_dir / "LONG_EXPERIMENT_0_RESULTS.md"
@@ -604,23 +743,30 @@ def write_report(
         column = f"prototype_valid_0{threshold}"
         if column in prototype.columns:
             lines.append(f"- kappa >= 0.{threshold:02d} valid fraction: {prototype[column].mean():.4f}")
+    lines.append(
+        f"- Label permutations with reference geometry rebuilt: {permutation_nulls['permutation_id'].nunique() if not permutation_nulls.empty else 0}"
+    )
     lines.extend(["", "## Strongest Correct/Wrong Effects", ""])
     if top_effects.empty:
         lines.append("No finite Hedges' g estimates.")
     else:
         lines.extend(
             [
-                "| Feature | Representation | Layer | Bin | g | 95% CI | Sign consistency |",
-                "|---|---|---:|---:|---:|---:|---:|",
+                "| Feature | Representation | Layer | Bin | g | 95% CI | Sign consistency | Perm. p |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for row in top_effects.itertuples():
             lines.append(
                 f"| {row.feature} | {row.representation} | {row.layer} | {row.progress_bin} | "
                 f"{row.hedges_g:.4f} | [{row.ci_low:.4f}, {row.ci_high:.4f}] | "
-                f"{row.question_sign_consistency:.3f} |"
+                f"{row.question_sign_consistency:.3f} | {row.permutation_p:.4f} |"
             )
     lines.extend(["", "## Length-Controlled Predictors", ""])
+    lines.append(
+        "Predictors are evaluated only for the discovery top-3 layer/bin candidates per feature and representation; these AUCs are selection-biased and not confirmatory."
+    )
+    lines.append("")
     if top_predictors.empty:
         lines.append("No eligible grouped predictor comparison.")
     else:
@@ -657,16 +803,31 @@ def main() -> None:
     args = parse_args()
     if args.bootstrap <= 0:
         raise ValueError("bootstrap must be positive")
+    if args.permutations < 0:
+        raise ValueError("permutations must be non-negative")
+    if args.predictor_candidates_per_feature <= 0:
+        raise ValueError("predictor-candidates-per-feature must be positive")
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     token = _load_parquet_directory(input_dir / "bin_features")
     span = _load_parquet_directory(input_dir / "span_features")
     prototype = _load_parquet_directory(input_dir / "prototype_diagnostics")
+    geometry = _load_parquet_directory(input_dir / "pairwise_geometry")
     combined = pd.concat([token, span], ignore_index=True, sort=False)
 
     effects = compute_effect_table(combined, bootstrap=args.bootstrap, seed=args.seed)
-    predictors = compute_predictor_table(combined, bootstrap=args.bootstrap, seed=args.seed)
+    permutation_nulls = run_geometry_permutations(
+        geometry, permutations=args.permutations, seed=args.seed + 5000
+    )
+    effects = add_permutation_pvalues(effects, permutation_nulls)
+    predictors = compute_predictor_table(
+        combined,
+        effects,
+        bootstrap=args.bootstrap,
+        seed=args.seed,
+        candidates_per_feature=args.predictor_candidates_per_feature,
+    )
     length_effect = compute_length_effect(combined, bootstrap=args.bootstrap, seed=args.seed + 9000)
 
     combined.to_parquet(output_dir / "long_experiment_0_bin_features.parquet", index=False)
@@ -674,6 +835,12 @@ def main() -> None:
     predictors.to_csv(output_dir / "long_experiment_0_predictor_comparisons.csv", index=False)
     prototype.to_parquet(
         output_dir / "long_experiment_0_prototype_diagnostics.parquet", index=False
+    )
+    geometry.to_parquet(
+        output_dir / "long_experiment_0_pairwise_geometry.parquet", index=False
+    )
+    permutation_nulls.to_csv(
+        output_dir / "long_experiment_0_permutation_null.csv", index=False
     )
     figures = write_figures(
         token,
@@ -694,6 +861,7 @@ def main() -> None:
         effects=effects,
         predictors=predictors,
         length_effect=length_effect,
+        permutation_nulls=permutation_nulls,
         figures=figures,
     )
     metadata = {
@@ -701,6 +869,8 @@ def main() -> None:
         "output_dir": str(output_dir),
         "run_label": args.run_label,
         "bootstrap": args.bootstrap,
+        "permutations": args.permutations,
+        "predictor_candidates_per_feature": args.predictor_candidates_per_feature,
         "seed": args.seed,
         "primary_representation": args.primary_representation,
         "questions": int(token["question_id"].nunique()),
