@@ -402,23 +402,41 @@ def aggregate_span_features(
         "layer",
         "think_length",
     ]
+    horizontal_values = horizontal.copy()
+    horizontal_values["span_turn_cos_split_a"] = horizontal_values["span_turn_cos"].where(
+        horizontal_values["span_id"] % 2 == 0
+    )
+    horizontal_values["span_turn_cos_split_b"] = horizontal_values["span_turn_cos"].where(
+        horizontal_values["span_id"] % 2 == 1
+    )
+    vertical_values = vertical.copy()
+    vertical_values["span_layer_turn_cos_split_a"] = vertical_values[
+        "span_layer_turn_cos"
+    ].where(vertical_values["span_id"] % 2 == 0)
+    vertical_values["span_layer_turn_cos_split_b"] = vertical_values[
+        "span_layer_turn_cos"
+    ].where(vertical_values["span_id"] % 2 == 1)
     horizontal_agg = (
-        horizontal.groupby(keys, as_index=False, observed=True)
+        horizontal_values.groupby(keys, as_index=False, observed=True)
         .agg(
             span_movement_norm_mean=("displacement_norm", "mean"),
             span_movement_norm_median=("displacement_norm", "median"),
             span_movement_norm_p90=("displacement_norm", lambda values: values.quantile(0.9)),
             span_turn_cos_mean=("span_turn_cos", "mean"),
             span_turn_cos_median=("span_turn_cos", "median"),
+            span_turn_cos_split_a=("span_turn_cos_split_a", "mean"),
+            span_turn_cos_split_b=("span_turn_cos_split_b", "mean"),
             span_count=("span_id", "size"),
         )
     )
     vertical_agg = (
-        vertical.groupby(keys, as_index=False, observed=True)
+        vertical_values.groupby(keys, as_index=False, observed=True)
         .agg(
             span_layer_update_norm_mean=("span_layer_update_norm", "mean"),
             span_layer_turn_cos_mean=("span_layer_turn_cos", "mean"),
             span_layer_turn_cos_median=("span_layer_turn_cos", "median"),
+            span_layer_turn_cos_split_a=("span_layer_turn_cos_split_a", "mean"),
+            span_layer_turn_cos_split_b=("span_layer_turn_cos_split_b", "mean"),
             vertical_span_count=("span_id", "size"),
         )
     )

@@ -81,9 +81,13 @@ def test_aggregate_span_features_has_one_row_per_rollout_bin_layer_representatio
 
     keys = ["question_id", "rollout_id", "representation", "progress_bin", "layer"]
     assert not frame.duplicated(keys).any()
-    assert {"span_turn_cos_mean", "span_layer_turn_cos_mean", "span_count"}.issubset(
-        frame.columns
-    )
+    assert {
+        "span_turn_cos_mean",
+        "span_layer_turn_cos_mean",
+        "span_turn_cos_split_a",
+        "span_turn_cos_split_b",
+        "span_count",
+    }.issubset(frame.columns)
 
 
 def test_non_audit_reduction_keeps_vectors_only_for_primary_cross_rollout_geometry() -> None:
