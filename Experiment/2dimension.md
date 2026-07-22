@@ -555,12 +555,35 @@ S^-_{i,k,l}=\max_{j\in G_q^-\setminus i}\cos(U_{i,k,l},U_{j,b,l}),
 D^{\rm set-dir}_{i,k,l}=S^+_{i,k,l}-S^-_{i,k,l}.
 \]
 
-正确/错误单中心只作可解释性对照：
+正确/错误单中心只作可解释性对照。令 `n+`、`n-` 为当前 balanced subset 中剔除 query 后的正/错误
+reference 数量，先保留 normalization 之前的 centroid：
 
 \[
-\mu^+_{q,b,l}=\operatorname{normalize}\left(\sum_{j\in G_q^+\setminus i}U_{j,b,l}\right),
+\bar U^+_{q,b,l}
+=\frac{1}{n_+}\sum_{j\in G_q^+\setminus i}U_{j,b,l},
 \qquad
-\mu^-_{q,b,l}=\operatorname{normalize}\left(\sum_{j\in G_q^-\setminus i}U_{j,b,l}\right),
+\bar U^-_{q,b,l}
+=\frac{1}{n_-}\sum_{j\in G_q^-\setminus i}U_{j,b,l}.
+\]
+
+量化 prototype 的方向缩水比：
+
+\[
+\kappa^+_{q,b,l}
+=\frac{\|\bar U^+_{q,b,l}\|_2}
+{\frac{1}{n_+}\sum_{j\in G_q^+\setminus i}\|U_{j,b,l}\|_2+\epsilon},
+\qquad
+\kappa^-_{q,b,l}
+=\frac{\|\bar U^-_{q,b,l}\|_2}
+{\frac{1}{n_-}\sum_{j\in G_q^-\setminus i}\|U_{j,b,l}\|_2+\epsilon}.
+\]
+
+由于 `U` 是单位向量，分母约为 1；`kappa=1` 表示组内方向完全一致，接近 0 表示方向互相抵消。之后才定义：
+
+\[
+\mu^+_{q,b,l}=\operatorname{normalize}(\bar U^+_{q,b,l}),
+\qquad
+\mu^-_{q,b,l}=\operatorname{normalize}(\bar U^-_{q,b,l}),
 \]
 
 \[
@@ -569,7 +592,10 @@ D^{\rm proto-dir}_{i,k,l}
 \]
 
 若正确路径方向多模态，单中心可能发生向量抵消，因此不能把 prototype 优于 set 或 set 优于 prototype
-解释为普遍规律；两者回答的是“公共方向”与“任一可行成功路径”两个不同问题。
+解释为普遍规律；两者回答的是“公共方向”与“任一可行成功路径”两个不同问题。`kappa+`、`kappa-`
+必须按 balanced subset 分别保存并报告；主诊断固定 `kappa_min=0.20`。任一组低于该阈值时，该 subset 的
+`D_proto-dir` 记为无效，不进入 E0-F2 prototype overlay，但不影响 `D_set-dir`。同时报告无效比例；
+`kappa_min=0.10/0.30` 只作预声明敏感性分析，不能选择效果最好的阈值作为主结果。
 
 跨 rollout 长度使用正标量的几何均值。令 `R=||Dtime||`：
 
@@ -625,6 +651,7 @@ horizontal_norm / horizontal_norm_delta
 vertical_norm / vertical_norm_delta / coordinate_entropy / effective_dimensions
 span_turn_cos / span_layer_turn_cos
 cross_set_direction / cross_prototype_direction / cross_length_support
+prototype_kappa_pos_mean/min / prototype_kappa_neg_mean/min / prototype_valid_fraction
 think_length / token_count / span_count / segment status
 ```
 
@@ -637,11 +664,12 @@ vectors；audit 题必须在运行前确定，不能根据效果大小挑选。
 
 ```text
 E0-F1  horizontal_norm × span_turn_cos scatter / hexbin，按 layer 与 progress 分面
-E0-F2  cross_length_support × cross_set_direction scatter，叠加 prototype control
+E0-F2  cross_length_support × cross_set_direction scatter，叠加通过 kappa gate 的 prototype control/shrinkage
 E0-F3  coordinate_entropy × vertical_norm / span_layer_turn_cos scatter
 E0-F4  layer × progress 的 correct-minus-wrong Hedges' g heatmap
 E0-F5  64/32、128/64、256/128 的 span-mean、token-angle 与 span-last 的 angle SNR / reliability 对照
 E0-F6  四个 think-length bins 的 effect curve 与样本覆盖
+E0-F7  raw think-token length 的 effect/AUC 地板线，以及 feature、length、feature+length 的配对比较
 ```
 
 散点的统计单位是 `rollout × progress-bin × layer`，但 CI、置换和模型比较的独立单位始终是 question。
@@ -655,18 +683,37 @@ E0-F6  四个 think-length bins 的 effect curve 与样本覆盖
 4. 报告 span angle 的 split-half/reference-bootstrap reliability；
 5. 检查收益是否只来自更少样本、更长有效 lag 或单一异常问题。
 
-所有 feature 至少控制 `think_length`、有效 token/span 数、mean hidden/update norm、relative progress 和 layer
-scale。题内 label permutation 必须重新计算 correct/wrong reference geometry，不能只在最终表上交换标签。
+`think_length` 不能只作为 stratifier/covariate。令 `L_i=T_i^{think}` 为完整 `<think>` 段的原始生成 token
+数（主规格不取 log），在与每个候选 feature 完全相同的 eligible rollouts 和 question-level outer splits 上计算：
+
+\[
+g_{\rm length}=\operatorname{HedgesG}(\{L_i:y_i=1\},\{L_i:y_i=0\}),
+\]
+
+以及只使用 `L_i` 的 length-only predictor。`feature-only`、`length-only` 和 `feature+length` 使用同一种
+预声明的正则化线性分类器、class weighting 和 outer folds；标准化参数与预测方向只能由 outer-train
+questions 学习，不能在测试题上把 AUC 事后翻转，也不能为每个 feature 单独选择最有利的正则强度。
+每个候选量都必须报告三者的 held-out within-question pairwise AUC，并用按 question 配对的 bootstrap 比较
+`Delta AUC`。signed `g_length` 必须报告，`|g_length|` 作为 absolute effect-size 图的固定水平参照线：只有
+feature-only 跑赢 length-only，才能称为更强的 standalone signal；只有 feature+length 跑赢 length-only，
+才能称为包含超出回答长度的增量信息。
+
+此外，所有 feature 至少控制 `think_length`、有效 token/span 数、mean hidden/update norm、relative progress
+和 layer scale。题内 label permutation 必须重新计算 correct/wrong reference geometry，不能只在最终表上交换标签。
 
 ### 5.8 实验 0 的决策规则与实验 1 接口
 
 实验 0 不以某个散点“看起来分开”作为通过。进入实验 1 前需要：
 
 1. `span-mean` 角度相对 token-angle/span-last 至少在 effect stability 或 reliability 上有一致优势；
-2. 横向长度、角度或二者联合结构不只由单一 progress bin、layer、长度桶或问题驱动；
-3. 跨 rollout `D_set-dir` 在 leave-one-out、balanced references 和 label permutation 下方向合理；
-4. coordinate entropy / vertical norm 若有信号，控制 layer scale 与 horizontal norm 后仍保留；
-5. 所有进入实验 1 的 representation、window/stride、layer 候选和 score 符号在 confirmatory 前冻结。
+2. 候选 hidden-state 指标在相同样本/outer folds 上必须同时满足：`feature-only > length-only`，以及
+   `feature+length > length-only`，两项配对 `Delta AUC` 的 question-bootstrap 95% CI 下界均大于 0；只满足
+   后者最多称为与长度互补，不能算该指标自身的分离度跑赢长度，也不能独立通过实验 0 gate；
+3. 横向长度、角度或二者联合结构不只由单一 progress bin、layer、长度桶或问题驱动；
+4. 跨 rollout `D_set-dir` 在 leave-one-out、balanced references 和 label permutation 下方向合理；
+5. prototype 结果仅在 `kappa` gate 有效，且必须同时报告缩水比分布和无效比例；
+6. coordinate entropy / vertical norm 若有信号，控制 layer scale 与 horizontal norm 后仍保留；
+7. 所有进入实验 1 的 representation、window/stride、layer 候选和 score 符号在 confirmatory 前冻结。
 
 若 token-level 长度/纵向 entropy 有差异，但跨 rollout direction 完全为 null，则保留实验 0 的描述性结果，
 不进入 success-trajectory 四格主线。若只有 span-pooled direction 稳定，则实验 1 聚焦 outcome-conditioned
@@ -994,6 +1041,7 @@ span-Wasserstein、angular OT 和 activation patching 属于后续机制实验�
 LONG_EXPERIMENT_0_RESULTS.md              多分辨率 dynamics atlas、SNR、progress/layer/length 图
 long_experiment_0_bin_features.parquet    question × rollout × bin × layer 标量
 long_experiment_0_question_effects.csv    Hedges' g、bootstrap、permutation 与题间一致性
+long_experiment_0_prototype_diagnostics.parquet  balanced subset × query 的 kappa+/-、gate 与有效率
 long_experiment_0_audit_spans*.npz        运行前固定少量 audit 题的 float16 span vectors
 
 LONG_EXPERIMENT_1_RESULTS.md              四格表、interaction、progress/length 曲线
