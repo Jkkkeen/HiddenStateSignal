@@ -241,3 +241,120 @@ class PermutationResult:
     nulls: pd.DataFrame
     label_count_checks: np.ndarray
 
+
+def _permuted_label_map(
+    labels: pd.DataFrame,
+    rng: np.random.Generator,
+) -> tuple[dict[tuple[str, int], bool], bool]:
+    mapping: dict[tuple[str, int], bool] = {}
+    checks: list[bool] = []
+    for question_id, group in labels.groupby("question_id", sort=True):
+        ordered = group.sort_values("rollout_id", kind="stable")
+        before = ordered["is_correct"].to_numpy(dtype=bool)
+        after = rng.permutation(before)
+        checks.append(int(before.sum()) == int(after.sum()))
+        mapping.update(
+            {
+                (str(question_id), int(rollout_id)): bool(label)
+                for rollout_id, label in zip(ordered["rollout_id"], after)
+            }
+        )
+    return mapping, bool(all(checks))
+
+
+def _assign_pair_types(
+    pairs: pd.DataFrame,
+    mapping: dict[tuple[str, int], bool],
+) -> pd.DataFrame:
+    relabeled = pairs.copy()
+    left = np.asarray(
+        [
+            mapping[(str(row.question_id), int(row.pair_lo))]
+            for row in relabeled.itertuples()
+        ],
+        dtype=bool,
+    )
+    right = np.asarray(
+        [
+            mapping[(str(row.question_id), int(row.pair_hi))]
+            for row in relabeled.itertuples()
+        ],
+        dtype=bool,
+    )
+    relabeled["pair_type"] = np.where(
+        left & right,
+        "++",
+        np.where(~left & ~right, "--", "+-"),
+    )
+    return relabeled
+
+
+def _null_estimates(
+    pairs: pd.DataFrame,
+    permutation_id: int,
+) -> pd.DataFrame:
+    frames = []
+    for scope, whole_trajectory in (("progress", False), ("whole", True)):
+        means = pair_type_means(pairs, whole_trajectory=whole_trajectory)
+        contrasts = question_contrasts(means)
+        group_cols = ["metric", "contrast", "layer"]
+        if not whole_trajectory:
+            group_cols.append("progress_bin")
+        estimates = (
+            contrasts.groupby(group_cols, as_index=False, observed=True)["value"]
+            .mean()
+            .rename(columns={"value": "mean_contrast"})
+        )
+        estimates.insert(0, "scope", scope)
+        estimates.insert(0, "permutation_id", int(permutation_id))
+        frames.append(estimates)
+    return pd.concat(frames, ignore_index=True)
+
+
+def permutation_inference(
+    pairs: pd.DataFrame,
+    labels: pd.DataFrame,
+    permutations: int,
+    seed: int,
+) -> PermutationResult:
+    """Build within-question label-permutation nulls from fixed pair geometry."""
+    if permutations <= 0:
+        raise ValueError("permutations must be positive")
+    label_view = labels[["question_id", "rollout_id", "is_correct"]].drop_duplicates(
+        ["question_id", "rollout_id"]
+    )
+    rng = np.random.default_rng(seed)
+    frames = []
+    checks = np.zeros(permutations, dtype=bool)
+    for permutation_id in range(permutations):
+        mapping, checks[permutation_id] = _permuted_label_map(label_view, rng)
+        relabeled = _assign_pair_types(pairs, mapping)
+        frames.append(_null_estimates(relabeled, permutation_id))
+    return PermutationResult(
+        nulls=pd.concat(frames, ignore_index=True),
+        label_count_checks=checks,
+    )
+
+
+def adjusted_max_stat_pvalues(
+    observed: pd.DataFrame,
+    nulls: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach family-wise max-absolute-statistic p-values to progress cells."""
+    result = observed.copy()
+    result["max_stat_p"] = np.nan
+    progress_nulls = nulls[nulls["scope"] == "progress"]
+    for keys, group in result.groupby(["metric", "contrast"], sort=True):
+        null_family = progress_nulls[
+            (progress_nulls["metric"] == keys[0])
+            & (progress_nulls["contrast"] == keys[1])
+        ]
+        maxima = null_family.groupby("permutation_id")["mean_contrast"].apply(
+            lambda values: values.abs().max()
+        )
+        for index in group.index:
+            observed_abs = abs(float(result.at[index, "mean_contrast"]))
+            result.at[index, "max_stat_p"] = (
+                1 + int((maxima >= observed_abs).sum())
+            ) / (1 + len(maxima))
+    return result

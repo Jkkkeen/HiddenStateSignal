@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from correct_trajectory_pairwise_geometry import (
+    adjusted_max_stat_pvalues,
     aggregate_directed_pairs,
     compute_pair_metrics,
     directed_four_cell_interactions,
     pair_type_means,
+    permutation_inference,
     question_contrasts,
     summarize_contrasts,
     symmetrize_pairs,
@@ -188,3 +190,88 @@ def test_question_bootstrap_is_deterministic() -> None:
     pd.testing.assert_frame_equal(first, second)
     assert first.iloc[0]["n_questions"] == 6
     assert first.iloc[0]["negative_sign_fraction"] == pytest.approx(5 / 6)
+
+
+def _synthetic_permutation_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
+    labels = []
+    pairs = []
+    for question_index in range(3):
+        question_id = f"q{question_index}"
+        label_by_rollout = {0: True, 1: True, 2: False, 3: False}
+        labels.extend(
+            {
+                "question_id": question_id,
+                "rollout_id": rollout_id,
+                "is_correct": is_correct,
+            }
+            for rollout_id, is_correct in label_by_rollout.items()
+        )
+        for layer in (24, 36):
+            for progress_bin in (0, 1):
+                for left in range(4):
+                    for right in range(left + 1, 4):
+                        same = label_by_rollout[left] == label_by_rollout[right]
+                        value = 0.2 if same else 1.0
+                        pair_type = (
+                            "++"
+                            if label_by_rollout[left] and label_by_rollout[right]
+                            else "--"
+                            if not label_by_rollout[left] and not label_by_rollout[right]
+                            else "+-"
+                        )
+                        pairs.append(
+                            {
+                                "question_id": question_id,
+                                "layer": layer,
+                                "progress_bin": progress_bin,
+                                "pair_lo": left,
+                                "pair_hi": right,
+                                "pair_type": pair_type,
+                                "angle_rad": value,
+                                "angle_deg": np.degrees(value),
+                                "delta_vec": value,
+                                "delta_rel": value,
+                                "delta_amp": value,
+                            }
+                        )
+    return pd.DataFrame(pairs), pd.DataFrame(labels)
+
+
+def test_permutation_preserves_label_counts_and_is_deterministic() -> None:
+    pairs, labels = _synthetic_permutation_inputs()
+
+    first = permutation_inference(pairs, labels, permutations=5, seed=9)
+    second = permutation_inference(pairs, labels, permutations=5, seed=9)
+
+    pd.testing.assert_frame_equal(first.nulls, second.nulls)
+    assert first.label_count_checks.all()
+    assert set(first.nulls["permutation_id"]) == set(range(5))
+    assert set(first.nulls["scope"]) == {"progress", "whole"}
+
+
+def test_max_stat_adjustment_uses_family_wide_null_maximum() -> None:
+    observed = pd.DataFrame(
+        {
+            "metric": ["angle_rad", "angle_rad"],
+            "contrast": ["pp_minus_pm", "pp_minus_pm"],
+            "layer": [24, 36],
+            "progress_bin": [0, 0],
+            "mean_contrast": [-0.8, -0.2],
+        }
+    )
+    nulls = pd.DataFrame(
+        {
+            "permutation_id": [0, 0, 1, 1],
+            "scope": ["progress"] * 4,
+            "metric": ["angle_rad"] * 4,
+            "contrast": ["pp_minus_pm"] * 4,
+            "layer": [24, 36, 24, 36],
+            "progress_bin": [0, 0, 0, 0],
+            "mean_contrast": [0.3, 0.4, 0.9, 0.1],
+        }
+    )
+
+    result = adjusted_max_stat_pvalues(observed, nulls)
+
+    assert result.loc[result["layer"] == 24, "max_stat_p"].iloc[0] == pytest.approx(2 / 3)
+    assert result.loc[result["layer"] == 36, "max_stat_p"].iloc[0] == pytest.approx(1.0)
