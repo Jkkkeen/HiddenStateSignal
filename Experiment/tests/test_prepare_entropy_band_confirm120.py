@@ -160,3 +160,20 @@ def test_select_formal_cohort_uses_frozen_order_and_clean_two_by_two() -> None:
     assert selected.strict_questions == ["q1"]
     assert {row["question_id"] for row in selected.selected_rows} == {"q2", "q1"}
     assert all(not row["truncated"] for row in selected.selected_rows)
+
+
+def test_extension50_launcher_is_bounded_and_does_not_extract_entropy() -> None:
+    script = (SCRIPTS / "launch_entropy_band_extension50_tmux.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--extension-count 500" in script
+    assert "--batch-size 50" in script
+    assert "candidate_ids_extension50_01.txt" in script
+    assert "a6be58071e4cba09297c7d2446d0fc632958f5759e7c0c8ca491d02e8da4eb80" in script
+    assert 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.65}"' in script
+    assert "--rollouts 8" in script
+    assert "--max-tokens 16384" in script
+    assert "--resume" in script
+    assert "extract_entropy_band_qwen3vl.py" not in script
+    assert "analyze_entropy_band_confirm120.py" not in script
