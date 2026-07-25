@@ -293,6 +293,12 @@ def label_permutation_cluster_test(
     valid_count = np.zeros_like(sum_effect, dtype=np.int16)
     rng = np.random.default_rng(seed)
 
+    def weighted_sum(weights: np.ndarray, values: np.ndarray) -> np.ndarray:
+        result = np.zeros((weights.shape[0], values.shape[1]), dtype=np.float64)
+        for rollout_index in range(weights.shape[1]):
+            result += weights[:, rollout_index, None] * values[rollout_index][None, :]
+        return result
+
     for _, question in rollout.groupby("question_id", sort=True):
         labels = (
             question[["rollout_id", "is_correct"]]
@@ -311,16 +317,16 @@ def label_permutation_cluster_test(
             [rng.permutation(observed_labels) for _ in range(permutations)], axis=0
         ).astype(np.float64)
         negative_labels = 1.0 - permuted_labels
-        positive_count = permuted_labels @ mask
-        negative_count = negative_labels @ mask
+        positive_count = weighted_sum(permuted_labels, mask)
+        negative_count = weighted_sum(negative_labels, mask)
         positive_mean = np.divide(
-            permuted_labels @ finite_values,
+            weighted_sum(permuted_labels, finite_values),
             positive_count,
             out=np.full((permutations, cell_count), np.nan),
             where=positive_count > 0,
         )
         negative_mean = np.divide(
-            negative_labels @ finite_values,
+            weighted_sum(negative_labels, finite_values),
             negative_count,
             out=np.full((permutations, cell_count), np.nan),
             where=negative_count > 0,
