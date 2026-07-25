@@ -173,27 +173,39 @@ def _cell_statistics(frame: pd.DataFrame, feature: str, position: str) -> tuple[
         return pd.DataFrame(), rollout
     pivot["question_effect"] = pivot[True] - pivot[False]
 
+    auc_rows = []
+    for key, question_cell in rollout.groupby(
+        ["question_id", "representation", "layer", position],
+        sort=False,
+        observed=True,
+    ):
+        auc_rows.append(
+            {
+                "question_id": key[0],
+                "representation": key[1],
+                "layer": key[2],
+                position: key[3],
+                "question_auc": pairwise_auc(
+                    question_cell.loc[question_cell["is_correct"], feature].to_numpy(),
+                    question_cell.loc[~question_cell["is_correct"], feature].to_numpy(),
+                ),
+            }
+        )
+    auc_frame = pd.DataFrame(auc_rows)
+    auc_lookup = {
+        key: group["question_auc"].dropna().to_numpy(dtype=np.float64)
+        for key, group in auc_frame.groupby(
+            ["representation", "layer", position], sort=False, observed=True
+        )
+    }
+
     rows = []
     for (representation, layer, cell), group in pivot.groupby(
         ["representation", "layer", position], sort=True, observed=True
     ):
         effects = group["question_effect"].to_numpy(dtype=np.float64)
         effects = effects[np.isfinite(effects)]
-        aucs = []
-        cell_rollouts = rollout[
-            (rollout["representation"] == representation)
-            & (rollout["layer"] == layer)
-            & (rollout[position] == cell)
-        ]
-        for _, question in cell_rollouts.groupby("question_id", sort=False):
-            aucs.append(
-                pairwise_auc(
-                    question.loc[question["is_correct"], feature].to_numpy(),
-                    question.loc[~question["is_correct"], feature].to_numpy(),
-                )
-            )
-        aucs = np.asarray(aucs, dtype=np.float64)
-        aucs = aucs[np.isfinite(aucs)]
+        aucs = auc_lookup.get((representation, layer, cell), np.empty(0, dtype=np.float64))
         rows.append(
             {
                 "feature": feature,
