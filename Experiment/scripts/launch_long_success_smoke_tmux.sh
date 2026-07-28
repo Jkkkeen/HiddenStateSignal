@@ -5,6 +5,8 @@ ROOT="${ROOT:-/data2/hjk/projects/AI-HiddenState-ER}"
 PYTHON="${PYTHON:-/data2/hjk/envs/hs_er/bin/python}"
 SESSION="${SESSION:-two_dim_e1_smoke32}"
 RUN_NAME="${RUN_NAME:-smoke32_20260721}"
+QUESTION_LIMIT="${QUESTION_LIMIT:-32}"
+RUN_LABEL="${RUN_LABEL:-Smoke}"
 RUN_DIR="${ROOT}/long_success_trajectory/${RUN_NAME}"
 INPUT="${ROOT}/data_long/rollouts_thinking_smoke500_mt16384_labeled.jsonl"
 LOG="${ROOT}/logs/two_dim_e1_${RUN_NAME}.log"
@@ -21,7 +23,7 @@ run_pipeline() {
   "${PYTHON}" scripts/prepare_long_success_smoke.py \
     --input "${INPUT}" \
     --output-dir "${RUN_DIR}/manifest" \
-    --smoke-questions 32 \
+    --smoke-questions "${QUESTION_LIMIT}" \
     --discovery-fraction 0.7 \
     --seed 20260721
 
@@ -48,6 +50,7 @@ run_pipeline() {
     --progress-bins 10 \
     --bootstrap 1000 \
     --permutations 100 \
+    --run-label "${RUN_LABEL}" \
     --seed 20260721
 
   echo "PIPELINE_COMPLETE ${RUN_DIR}"
@@ -70,6 +73,8 @@ if [[ -n "${gpu_pids}" ]]; then
 fi
 
 mkdir -p "${ROOT}/logs"
-tmux new-session -d -s "${SESSION}" \
-  "cd '${ROOT}' && bash scripts/launch_long_success_smoke_tmux.sh --run 2>&1 | tee '${LOG}'"
+printf -v tmux_command \
+  "cd %q && env ROOT=%q PYTHON=%q SESSION=%q RUN_NAME=%q QUESTION_LIMIT=%q RUN_LABEL=%q bash scripts/launch_long_success_smoke_tmux.sh --run 2>&1 | tee %q" \
+  "${ROOT}" "${ROOT}" "${PYTHON}" "${SESSION}" "${RUN_NAME}" "${QUESTION_LIMIT}" "${RUN_LABEL}" "${LOG}"
+tmux new-session -d -s "${SESSION}" "${tmux_command}"
 echo "launched tmux=${SESSION} log=${LOG} run_dir=${RUN_DIR}"

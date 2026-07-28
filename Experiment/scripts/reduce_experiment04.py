@@ -73,17 +73,21 @@ def compute_calibration(paths: list[Path]) -> dict[str, np.ndarray]:
     common_sum: np.ndarray | None = None
     rollout_vertical_medians = []
     count = 0
+    partial_only = 0
     for path in paths:
         with np.load(path, allow_pickle=False) as cached:
             vectors = cached["full_vectors"].astype(np.float32)
-        if vectors.ndim != 4 or vectors.shape[0] == 0:
-            raise ValueError(f"cache has no full chunks: {path}")
-        per_rollout_common = vectors.mean(axis=0)
-        common_sum = (
-            per_rollout_common.astype(np.float64)
-            if common_sum is None
-            else common_sum + per_rollout_common
-        )
+        if vectors.ndim != 4:
+            raise ValueError(f"cache has malformed full chunks: {path}")
+        if vectors.shape[0] == 0:
+            # A rollout shorter than one chunk is valid terminal-partial data,
+            # but cannot contribute to full-chunk calibration statistics.
+            partial_only += 1
+            continue
+        if common_sum is None:
+            common_sum = vectors.mean(axis=0).astype(np.float64)
+        else:
+            common_sum += vectors.mean(axis=0).astype(np.float64)
         update_norm = np.linalg.norm(np.diff(vectors, axis=2), axis=-1)
         rollout_vertical_medians.append(np.median(update_norm, axis=0))
         count += 1
@@ -96,6 +100,8 @@ def compute_calibration(paths: list[Path]) -> dict[str, np.ndarray]:
         "common": common,
         "vertical_scale": vertical_scale,
         "vertical_threshold": vertical_threshold,
+        "calibration_rollout_count": np.asarray(count, dtype=np.int64),
+        "partial_only_rollout_count": np.asarray(partial_only, dtype=np.int64),
     }
 
 
@@ -367,6 +373,8 @@ class ParquetAppender:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
+        if frame.empty:
+            return
         table = pa.Table.from_pandas(frame, preserve_index=False)
         if self.writer is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,6 +452,15 @@ def main() -> None:
         "hidden_state_indexes": 37,
         "rolling_displacements": args.rolling,
     }
+    if args.mode == "discovery":
+        audit.update(
+            {
+                "calibration_rollouts": int(calibration["calibration_rollout_count"].item()),
+                "partial_only_rollouts": int(
+                    calibration["partial_only_rollout_count"].item()
+                ),
+            }
+        )
     (output_dir / "reduction_audit.json").write_text(
         json.dumps(audit, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

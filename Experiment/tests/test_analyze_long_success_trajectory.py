@@ -141,6 +141,8 @@ def test_analyzer_writes_end_to_end_artifacts(tmp_path: Path, monkeypatch) -> No
             "10",
             "--permutations",
             "2",
+            "--run-label",
+            "Discovery Expansion",
         ],
     )
 
@@ -150,3 +152,5 @@ def test_analyzer_writes_end_to_end_artifacts(tmp_path: Path, monkeypatch) -> No
     assert (output_dir / "summary.csv").is_file()
     assert (output_dir / "question_interactions.csv").is_file()
     assert (output_dir / "span_scores.parquet").is_file()
+    report = (output_dir / "LONG_EXPERIMENT_1_RESULTS.md").read_text(encoding="utf-8")
+    assert report.startswith("# Long Experiment 1 Discovery Expansion Results")

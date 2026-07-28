@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bootstrap", type=int, default=1000)
     parser.add_argument("--permutations", type=int, default=100)
     parser.add_argument("--seed", type=int, default=20260721)
+    parser.add_argument("--run-label", default="Smoke")
     return parser.parse_args()
 
 
@@ -536,7 +537,7 @@ def write_report(
 ) -> Path:
     path = output_dir / "LONG_EXPERIMENT_1_RESULTS.md"
     lines = [
-        "# Long Experiment 1 Smoke Results",
+        f"# Long Experiment 1 {args.run_label} Results",
         "",
         "Balanced leave-one-rollout-out success/failure trajectory interactions on fixed long responses.",
         "",
@@ -674,6 +675,7 @@ def main() -> None:
         "bootstrap": args.bootstrap,
         "permutations": args.permutations,
         "seed": args.seed,
+        "run_label": args.run_label,
         "new_generation": False,
         "report": report.name,
     }

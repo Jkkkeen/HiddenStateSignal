@@ -4,13 +4,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from extract_experiment04_qwen3vl import save_rollout_cache  # noqa: E402
-from reduce_experiment04 import compute_calibration, reduce_cache  # noqa: E402
+from reduce_experiment04 import ParquetAppender, compute_calibration, reduce_cache  # noqa: E402
 
 
 def _cache(path: Path, offset: float, rollout_id: int) -> Path:
@@ -43,6 +44,31 @@ def _cache(path: Path, offset: float, rollout_id: int) -> Path:
     return path
 
 
+def _partial_only_cache(path: Path, rollout_id: int) -> Path:
+    reps, layers, dim = 3, 4, 3
+    reduced = {
+        "full_vectors": np.empty((0, reps, layers, dim), dtype=np.float16),
+        "partial_vectors": np.zeros((1, reps, layers, dim), dtype=np.float16),
+        "full_bounds": np.empty((0, 2), dtype=np.int32),
+        "partial_bounds": np.asarray([[0, 7]], dtype=np.int32),
+        "token_entropy_full": np.empty((0, layers, 3, 4), dtype=np.float32),
+        "token_entropy_partial": np.ones((1, layers, 3, 4), dtype=np.float32),
+    }
+    save_rollout_cache(
+        path,
+        reduced,
+        metadata={
+            "question_id": "partial",
+            "rollout_id": rollout_id,
+            "is_correct": False,
+            "think_length": 7,
+            "response_length": 7,
+            "chunk_size": 256,
+        },
+    )
+    return path
+
+
 def test_calibration_is_rollout_equal_and_has_vertical_thresholds(tmp_path: Path) -> None:
     paths = [_cache(tmp_path / "a.npz", 0.0, 0), _cache(tmp_path / "b.npz", 10.0, 1)]
     calibration = compute_calibration(paths)
@@ -54,6 +80,30 @@ def test_calibration_is_rollout_equal_and_has_vertical_thresholds(tmp_path: Path
         calibration["vertical_threshold"],
         np.maximum(1e-8, 1e-4 * calibration["vertical_scale"]),
     )
+
+
+def test_partial_only_rollout_is_skipped_for_calibration(tmp_path: Path) -> None:
+    full = _cache(tmp_path / "full.npz", 0.0, 0)
+    partial = _partial_only_cache(tmp_path / "partial.npz", 1)
+
+    calibration = compute_calibration([full, partial])
+
+    assert calibration["calibration_rollout_count"].item() == 1
+    assert calibration["partial_only_rollout_count"].item() == 1
+    frames = reduce_cache(partial, calibration)
+    assert frames["horizontal"].empty
+    assert not frames["vertical"].empty
+    assert frames["vertical"]["is_partial"].all()
+
+
+def test_parquet_appender_ignores_empty_frames(tmp_path: Path) -> None:
+    path = tmp_path / "rows.parquet"
+    writer = ParquetAppender(path)
+    writer.append(pd.DataFrame({"value": [1.0]}))
+    writer.append(pd.DataFrame())
+    writer.close()
+
+    assert pd.read_parquet(path)["value"].tolist() == [1.0]
 
 
 def test_reduce_cache_emits_full_horizontal_and_partial_vertical_only(tmp_path: Path) -> None:

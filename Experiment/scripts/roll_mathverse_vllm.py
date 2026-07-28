@@ -11,7 +11,6 @@ from typing import Any
 
 import pandas as pd
 from PIL import Image
-from vllm import LLM, SamplingParams
 
 
 QUERY_FIELDS = (
@@ -167,10 +166,10 @@ def find_image_path(record: dict[str, Any], data_dir: Path) -> Path | None:
     return None
 
 
-def already_done(output_path: Path) -> set[str]:
+def existing_rollout_ids(output_path: Path) -> dict[str, set[int]]:
     if not output_path.exists():
-        return set()
-    done: set[str] = set()
+        return {}
+    existing: dict[str, set[int]] = {}
     with output_path.open("r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -179,9 +178,16 @@ def already_done(output_path: Path) -> set[str]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("question_id") is not None:
-                done.add(str(row["question_id"]))
-    return done
+            question_id = row.get("question_id")
+            rollout_id = row.get("rollout_id")
+            if question_id is None or rollout_id is None:
+                continue
+            try:
+                rollout_id = int(rollout_id)
+            except (TypeError, ValueError):
+                continue
+            existing.setdefault(str(question_id), set()).add(rollout_id)
+    return existing
 
 
 def read_question_ids(path: str) -> set[str]:
@@ -212,6 +218,8 @@ def build_messages(query: str, image_path: Path | None) -> list[dict[str, Any]]:
 
 
 def main() -> None:
+    from vllm import LLM, SamplingParams
+
     args = parse_args()
     os.environ["HF_ENDPOINT"] = args.hf_endpoint
     os.environ["HF_HOME"] = args.hf_home
@@ -233,10 +241,19 @@ def main() -> None:
     if args.limit is not None and args.limit >= 0:
         records = records[: args.limit]
 
-    skip_ids = already_done(output_path) if args.resume else set()
+    existing_ids = existing_rollout_ids(output_path) if args.resume else {}
+    complete_ids = {
+        question_id
+        for question_id, rollout_ids in existing_ids.items()
+        if set(range(args.rollouts)).issubset(rollout_ids)
+    }
     print(f"Loaded {len(records)} records from {data_dir}")
-    if skip_ids:
-        print(f"Resume enabled: skipping {len(skip_ids)} completed question ids")
+    if existing_ids:
+        partial_count = len(existing_ids) - len(complete_ids)
+        print(
+            f"Resume enabled: skipping {len(complete_ids)} completed question ids; "
+            f"repairing {partial_count} partial question ids"
+        )
 
     llm = LLM(
         model=args.model,
@@ -245,27 +262,32 @@ def main() -> None:
         gpu_memory_utilization=args.gpu_memory_utilization,
         limit_mm_per_prompt={"image": 1, "video": 0},
     )
-    sampling_params = SamplingParams(
-        n=args.rollouts,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_tokens=args.max_tokens,
-    )
-
     with output_path.open("a", encoding="utf-8") as out:
         for index, record in enumerate(records):
             question_id = get_question_id(record, index)
-            if question_id in skip_ids:
+            completed_rollout_ids = existing_ids.get(question_id, set())
+            missing_rollout_ids = [
+                rollout_id
+                for rollout_id in range(args.rollouts)
+                if rollout_id not in completed_rollout_ids
+            ]
+            if not missing_rollout_ids:
                 continue
 
             query = get_query(record, args.query_field)
             image_path = find_image_path(record, data_dir)
             messages = build_messages(query, image_path)
+            sampling_params = SamplingParams(
+                n=len(missing_rollout_ids),
+                temperature=args.temperature,
+                top_p=args.top_p,
+                max_tokens=args.max_tokens,
+            )
             outputs = llm.chat(messages, sampling_params=sampling_params)
             completions = outputs[0].outputs
 
             answer = first_present(record, ANSWER_FIELDS)
-            for rollout_id, completion in enumerate(completions):
+            for rollout_id, completion in zip(missing_rollout_ids, completions):
                 token_ids = getattr(completion, "token_ids", None)
                 output_token_count = len(token_ids) if token_ids is not None else None
                 finish_reason = getattr(completion, "finish_reason", None)
@@ -299,7 +321,7 @@ def main() -> None:
                 out.flush()
 
             print(
-                f"Wrote {len(completions)} rollouts for {question_id} "
+                f"Wrote {len(completions)} missing rollouts for {question_id} "
                 f"(image={'yes' if image_path else 'no'})"
             )
 

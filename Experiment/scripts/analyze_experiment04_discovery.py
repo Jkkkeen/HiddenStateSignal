@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 from collections import deque
@@ -392,7 +393,138 @@ def _feature_columns(frame: pd.DataFrame) -> list[str]:
     ]
 
 
-def _plot_heatmap(table: pd.DataFrame, value: str, output: Path, title: str) -> None:
+def canonical_family_table(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Collapse copied token scalars before permutation-family construction."""
+    required = {"direction", "representation", "feature", "abs_t"}
+    missing = required - set(candidates.columns)
+    if missing:
+        raise ValueError(f"candidate table missing columns: {sorted(missing)}")
+    raw = (
+        candidates.groupby(
+            ["direction", "representation", "feature"], as_index=False, observed=True
+        )["abs_t"]
+        .max()
+        .sort_values(["feature", "direction", "representation"], kind="stable")
+    )
+    rows = []
+    for feature, families in raw.groupby("feature", sort=True, observed=True):
+        if str(feature).startswith("token_"):
+            canonical = families[
+                (families["direction"] == "horizontal")
+                & (families["representation"] == "mean")
+            ]
+            if canonical.empty:
+                raise ValueError(
+                    f"token feature lacks canonical horizontal/mean family: {feature}"
+                )
+            row = canonical.iloc[0].to_dict()
+            row["hypothesis_key"] = f"token::{feature}"
+            row["duplicate_family_count"] = int(len(families))
+            rows.append(row)
+            continue
+        for family in families.itertuples(index=False):
+            rows.append(
+                {
+                    "direction": family.direction,
+                    "representation": family.representation,
+                    "feature": family.feature,
+                    "abs_t": float(family.abs_t),
+                    "hypothesis_key": (
+                        f"geometry::{family.direction}::{family.representation}::"
+                        f"{family.feature}"
+                    ),
+                    "duplicate_family_count": 1,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "direction",
+                "representation",
+                "feature",
+                "abs_t",
+                "hypothesis_key",
+                "duplicate_family_count",
+            ]
+        )
+    return (
+        pd.DataFrame(rows)
+        .sort_values(
+            ["abs_t", "hypothesis_key"], ascending=[False, True], kind="stable"
+        )
+        .reset_index(drop=True)
+    )
+
+
+def select_primary_clusters(
+    clusters: pd.DataFrame,
+    *,
+    top_figures: int,
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """Select at most one corrected cluster per independently tested family."""
+    required = {"hypothesis_key", "p_value", "mass"}
+    missing = required - set(clusters.columns)
+    if missing:
+        raise ValueError(f"cluster table missing columns: {sorted(missing)}")
+    if top_figures < 0:
+        raise ValueError("top_figures must be non-negative")
+    selected = clusters.copy()
+    p_values = pd.to_numeric(selected["p_value"], errors="coerce")
+    selected = selected.loc[p_values.notna() & p_values.le(alpha)].copy()
+    selected["p_value"] = p_values.loc[selected.index].astype(float)
+    selected["mass"] = pd.to_numeric(selected["mass"], errors="coerce").fillna(-np.inf)
+    if "primary_supported" in selected.columns:
+        supported = selected["primary_supported"].fillna(False).astype(bool)
+        selected = selected.loc[supported].copy()
+    selected = selected.sort_values(
+        ["p_value", "mass", "hypothesis_key"],
+        ascending=[True, False, True],
+        kind="stable",
+    ).drop_duplicates("hypothesis_key", keep="first")
+    return selected.head(top_figures).reset_index(drop=True)
+
+
+def select_cluster_anchor(
+    effects: pd.DataFrame,
+    cluster_cells: list[tuple[int, int]],
+) -> pd.Series:
+    """Choose the largest absolute t-statistic constrained to cluster cells."""
+    required = {"layer", "progress_bin", "t_stat"}
+    missing = required - set(effects.columns)
+    if missing:
+        raise ValueError(f"effect table missing columns: {sorted(missing)}")
+    allowed = {(int(layer), int(position)) for layer, position in cluster_cells}
+    selected = effects[
+        [
+            (int(row.layer), int(row.progress_bin)) in allowed
+            for row in effects.itertuples(index=False)
+        ]
+    ].copy()
+    selected = selected[np.isfinite(selected["t_stat"])]
+    if selected.empty:
+        raise ValueError("cluster contains no finite primary-supported effect cell")
+    selected["anchor_abs_t"] = selected["t_stat"].abs()
+    return selected.sort_values(
+        ["anchor_abs_t", "layer", "progress_bin"],
+        ascending=[False, True, True],
+        kind="stable",
+    ).iloc[0]
+
+
+def _family_seed(seed: int, hypothesis_key: str) -> int:
+    digest = hashlib.sha256(hypothesis_key.encode("utf-8")).digest()
+    return int((seed + int.from_bytes(digest[:4], "big")) % (2**32 - 1))
+
+
+def _plot_heatmap(
+    table: pd.DataFrame,
+    value: str,
+    output: Path,
+    title: str,
+    *,
+    cluster_cells: list[tuple[int, int]] | None = None,
+) -> None:
     pivot = table.pivot(index="layer", columns="progress_bin", values=value).sort_index()
     fig, axis = plt.subplots(figsize=(10, 6))
     bound = max(float(np.nanmax(np.abs(pivot.to_numpy()))), 0.1) if value != "questions" else None
@@ -407,14 +539,54 @@ def _plot_heatmap(table: pd.DataFrame, value: str, output: Path, title: str) -> 
     axis.set_title(title)
     axis.set_xlabel("relative-progress bin")
     axis.set_ylabel("hidden-state index")
+    for layer, position in cluster_cells or []:
+        if layer not in pivot.index or position not in pivot.columns:
+            continue
+        row = int(pivot.index.get_loc(layer))
+        column = int(pivot.columns.get_loc(position))
+        axis.add_patch(
+            plt.Rectangle(
+                (column - 0.5, row - 0.5),
+                1,
+                1,
+                fill=False,
+                edgecolor="black",
+                linewidth=1.0,
+            )
+        )
     fig.colorbar(image, ax=axis)
     fig.tight_layout()
+    output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160)
     plt.close(fig)
 
 
-def _plot_curve(curve: pd.DataFrame, x: str, output: Path, title: str) -> None:
+def _contiguous_runs(values: list[int]) -> list[tuple[int, int]]:
+    ordered = sorted(set(int(value) for value in values))
+    if not ordered:
+        return []
+    runs = []
+    start = previous = ordered[0]
+    for value in ordered[1:]:
+        if value != previous + 1:
+            runs.append((start, previous))
+            start = value
+        previous = value
+    runs.append((start, previous))
+    return runs
+
+
+def _plot_curve(
+    curve: pd.DataFrame,
+    x: str,
+    output: Path,
+    title: str,
+    *,
+    highlight_bins: list[int] | None = None,
+) -> None:
     fig, axis = plt.subplots(figsize=(8, 5))
+    for start, end in _contiguous_runs(highlight_bins or []):
+        axis.axvspan(start - 0.5, end + 0.5, color="#f2c14e", alpha=0.16, zorder=0)
     for label, color, name in ((True, "#1b8a5a", "correct"), (False, "#c74c4c", "wrong")):
         group = curve[curve["is_correct"] == label].sort_values(x)
         axis.plot(group[x], group["mean"], color=color, label=name)
@@ -423,6 +595,7 @@ def _plot_curve(curve: pd.DataFrame, x: str, output: Path, title: str) -> None:
     axis.set_xlabel(x)
     axis.legend()
     fig.tight_layout()
+    output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=160)
     plt.close(fig)
 
@@ -509,28 +682,46 @@ def main() -> None:
     summary_effects.to_csv(output_dir / "summary_effects.csv", index=False)
     candidates = effects[effects["primary_support"]].copy()
     candidates["abs_t"] = candidates["t_stat"].abs()
-    family_rank = (
+    raw_family_rank = (
         candidates.groupby(["direction", "representation", "feature"], as_index=False)["abs_t"]
         .max()
         .sort_values("abs_t", ascending=False)
     )
+    family_rank = canonical_family_table(candidates)
+    canonical_family_count = len(family_rank)
+    duplicate_families_removed = int(len(raw_family_rank) - canonical_family_count)
     if args.cluster_top_families > 0:
         family_rank = family_rank.head(args.cluster_top_families)
 
     cluster_rows = []
-    for family_index, family in enumerate(family_rank.itertuples(index=False), start=1):
+    for family in family_rank.itertuples(index=False):
         frame = frame_by_direction[family.direction]
-        clusters, _, layers, positions = label_permutation_cluster_test(
+        family_clusters, _, layers, positions = label_permutation_cluster_test(
             frame,
             family.feature,
             family.representation,
             "progress_bin",
             permutations=args.permutations,
-            seed=args.seed + family_index,
+            seed=_family_seed(args.seed, family.hypothesis_key),
         )
-        for cluster_id, cluster in enumerate(clusters):
+        family_effects = candidates[
+            (candidates["direction"] == family.direction)
+            & (candidates["representation"] == family.representation)
+            & (candidates["feature"] == family.feature)
+        ]
+        for cluster_id, cluster in enumerate(family_clusters):
+            cells = [
+                (int(layers[cell[0]]), int(positions[cell[1]]))
+                for cell in cluster["cells"]
+            ]
+            try:
+                anchor = select_cluster_anchor(family_effects, cells)
+            except ValueError:
+                anchor = None
             cluster_rows.append(
                 {
+                    "hypothesis_key": family.hypothesis_key,
+                    "duplicate_family_count": int(family.duplicate_family_count),
                     "direction": family.direction,
                     "representation": family.representation,
                     "feature": family.feature,
@@ -538,30 +729,89 @@ def main() -> None:
                     "sign": cluster["sign"],
                     "mass": cluster["mass"],
                     "p_value": cluster["p_value"],
-                    "layers": json.dumps(sorted({layers[cell[0]] for cell in cluster["cells"]})),
-                    "progress_bins": json.dumps(
-                        sorted({positions[cell[1]] for cell in cluster["cells"]})
-                    ),
-                    "cell_count": len(cluster["cells"]),
+                    "layers": sorted({cell[0] for cell in cells}),
+                    "progress_bins": sorted({cell[1] for cell in cells}),
+                    "cells": cells,
+                    "cell_count": len(cells),
+                    "primary_supported": anchor is not None,
+                    "anchor_layer": int(anchor["layer"]) if anchor is not None else np.nan,
+                    "anchor_progress_bin": int(anchor["progress_bin"])
+                    if anchor is not None
+                    else np.nan,
+                    "anchor_t_stat": float(anchor["t_stat"])
+                    if anchor is not None
+                    else np.nan,
+                    "anchor_abs_t": float(abs(anchor["t_stat"]))
+                    if anchor is not None
+                    else np.nan,
+                    "anchor_auc": float(anchor["within_q_auc"])
+                    if anchor is not None
+                    else np.nan,
+                    "anchor_questions": int(anchor["questions"])
+                    if anchor is not None
+                    else 0,
                 }
             )
-    clusters = pd.DataFrame(cluster_rows)
-    clusters.to_csv(output_dir / "cluster_permutation.csv", index=False)
+    cluster_columns = [
+        "hypothesis_key",
+        "duplicate_family_count",
+        "direction",
+        "representation",
+        "feature",
+        "cluster_id",
+        "sign",
+        "mass",
+        "p_value",
+        "layers",
+        "progress_bins",
+        "cells",
+        "cell_count",
+        "primary_supported",
+        "anchor_layer",
+        "anchor_progress_bin",
+        "anchor_t_stat",
+        "anchor_abs_t",
+        "anchor_auc",
+        "anchor_questions",
+    ]
+    clusters = pd.DataFrame(cluster_rows, columns=cluster_columns)
+    clusters_for_csv = clusters.copy()
+    for column in ("layers", "progress_bins", "cells"):
+        clusters_for_csv[column] = clusters_for_csv[column].map(json.dumps)
+    clusters_for_csv.to_csv(output_dir / "cluster_permutation.csv", index=False)
 
-    top = candidates.sort_values("abs_t", ascending=False).head(args.top_figures)
-    figure_paths = []
-    for rank, row in enumerate(top.itertuples(index=False), start=1):
+    primary = select_primary_clusters(clusters, top_figures=args.top_figures)
+    for old_figure in figure_dir.glob("F*.png"):
+        old_figure.unlink()
+    appendix_dir = figure_dir / "exploratory_single_cell"
+    appendix_dir.mkdir(parents=True, exist_ok=True)
+    for old_figure in appendix_dir.glob("A*.png"):
+        old_figure.unlink()
+
+    primary_figure_paths = []
+    for rank, row in enumerate(primary.itertuples(index=False), start=1):
         family = effects[
             (effects["direction"] == row.direction)
             & (effects["representation"] == row.representation)
             & (effects["feature"] == row.feature)
         ]
+        cells = [(int(layer), int(position)) for layer, position in row.cells]
         heatmap = figure_dir / f"F{rank:02d}_{row.direction}_{row.representation}_{row.feature}_atlas.png"
-        _plot_heatmap(family, "t_stat", heatmap, f"{row.direction} | {row.representation} | {row.feature}")
-        figure_paths.append(heatmap)
+        _plot_heatmap(
+            family,
+            "t_stat",
+            heatmap,
+            (
+                f"{row.direction} | {row.representation} | {row.feature} | "
+                f"cluster p={row.p_value:.4g}"
+            ),
+            cluster_cells=cells,
+        )
+        primary_figure_paths.append(heatmap)
         frame = frame_by_direction[row.direction]
         selected = frame[
-            (frame["representation"] == row.representation) & (frame["layer"] == row.layer)
+            (frame["representation"] == row.representation)
+            & (frame["layer"] == int(row.anchor_layer))
         ]
         curve = question_equal_curve(
             selected,
@@ -571,8 +821,66 @@ def main() -> None:
             seed=args.seed + rank,
         )
         curve_path = figure_dir / f"F{rank:02d}_{row.direction}_{row.representation}_{row.feature}_curve.png"
-        _plot_curve(curve, "progress_bin", curve_path, f"L{row.layer} correct/wrong trajectory")
-        figure_paths.append(curve_path)
+        anchor_bins = [position for layer, position in cells if layer == int(row.anchor_layer)]
+        _plot_curve(
+            curve,
+            "progress_bin",
+            curve_path,
+            (
+                f"L{int(row.anchor_layer)} correct/wrong trajectory | "
+                f"cluster p={row.p_value:.4g}"
+            ),
+            highlight_bins=anchor_bins,
+        )
+        primary_figure_paths.append(curve_path)
+
+    appendix_top = candidates.sort_values(
+        ["abs_t", "direction", "representation", "feature", "layer", "progress_bin"],
+        ascending=[False, True, True, True, True, True],
+        kind="stable",
+    ).head(args.top_figures)
+    appendix_figure_paths = []
+    for rank, row in enumerate(appendix_top.itertuples(index=False), start=1):
+        family = effects[
+            (effects["direction"] == row.direction)
+            & (effects["representation"] == row.representation)
+            & (effects["feature"] == row.feature)
+        ]
+        heatmap = appendix_dir / (
+            f"A{rank:02d}_{row.direction}_{row.representation}_{row.feature}_atlas.png"
+        )
+        _plot_heatmap(
+            family,
+            "t_stat",
+            heatmap,
+            (
+                "Uncorrected exploratory single-cell ranking | "
+                f"{row.direction} | {row.representation} | {row.feature}"
+            ),
+        )
+        appendix_figure_paths.append(heatmap)
+        frame = frame_by_direction[row.direction]
+        selected = frame[
+            (frame["representation"] == row.representation)
+            & (frame["layer"] == row.layer)
+        ]
+        curve = question_equal_curve(
+            selected,
+            row.feature,
+            "progress_bin",
+            bootstrap=args.bootstrap,
+            seed=args.seed + 10_000 + rank,
+        )
+        curve_path = appendix_dir / (
+            f"A{rank:02d}_{row.direction}_{row.representation}_{row.feature}_curve.png"
+        )
+        _plot_curve(
+            curve,
+            "progress_bin",
+            curve_path,
+            f"Uncorrected exploratory single-cell ranking | L{row.layer}",
+        )
+        appendix_figure_paths.append(curve_path)
 
     candidate_columns = [
         "direction",
@@ -596,28 +904,53 @@ def main() -> None:
         f"- Questions: {n_questions}",
         f"- Rollouts: {horizontal[['question_id', 'rollout_id']].drop_duplicates().shape[0]}",
         f"- Primary-support threshold: {minimum_support} questions",
-        f"- Cell families scanned: {len(family_rank)}",
+        f"- Raw direction/representation families: {len(raw_family_rank)}",
+        f"- Unique tested families: {len(family_rank)}",
+        f"- Duplicated token families removed: {duplicate_families_removed}",
         f"- Cluster permutations: {args.permutations}",
         "- Cluster null: within-question correct/wrong label permutation with label counts fixed.",
         "- This is discovery-only; confirm remains blind.",
         "",
-        "## Strongest Cells",
+        "## Primary Cluster-Significant Findings",
         "",
     ]
-    for row in top.itertuples(index=False):
+    if primary.empty:
+        report.append("- No cluster-significant family passed p <= 0.05.")
+    for row in primary.itertuples(index=False):
+        report.append(
+            f"- {row.direction} / {row.representation} / {row.feature}: "
+            f"cluster p={row.p_value:.4g}, mass={row.mass:.3f}, sign={int(row.sign):+d}, "
+            f"cells={int(row.cell_count)}; anchor L{int(row.anchor_layer)} / "
+            f"bin{int(row.anchor_progress_bin)}, t={row.anchor_t_stat:.3f}, "
+            f"AUC={row.anchor_auc:.3f}, Nq={int(row.anchor_questions)}"
+        )
+    report.extend(["", "## Exploratory Single-Cell Appendix", ""])
+    report.append("- Uncorrected maximum-|t| ranking; do not use for confirmatory selection.")
+    for row in appendix_top.itertuples(index=False):
         report.append(
             f"- {row.direction} / {row.representation} / {row.feature} / L{row.layer} / "
             f"bin{row.progress_bin}: t={row.t_stat:.3f}, AUC={row.within_q_auc:.3f}, "
             f"Nq={row.questions}"
         )
     (output_dir / "DISCOVERY_REPORT.md").write_text("\n".join(report) + "\n", encoding="utf-8")
-    links = "\n".join(
+    primary_links = "\n".join(
         f'<li><a href="figures/{html.escape(path.name)}">{html.escape(path.name)}</a></li>'
-        for path in figure_paths
+        for path in primary_figure_paths
+    )
+    appendix_links = "\n".join(
+        (
+            '<li><a href="figures/exploratory_single_cell/'
+            f'{html.escape(path.name)}">{html.escape(path.name)}</a></li>'
+        )
+        for path in appendix_figure_paths
     )
     (output_dir / "DISCOVERY_REPORT.html").write_text(
         f"<!doctype html><meta charset='utf-8'><title>Experiment 04 Discovery</title>"
-        f"<h1>Experiment 04 Discovery</h1><p>Confirm remains blind.</p><ul>{links}</ul>",
+        "<h1>Experiment 04 Discovery</h1><p>Confirm remains blind.</p>"
+        f"<h2>Primary Cluster-Significant Findings</h2><ul>{primary_links}</ul>"
+        "<h2>Exploratory Single-Cell Appendix</h2>"
+        "<p>Uncorrected maximum-|t| ranking; not confirmatory evidence.</p>"
+        f"<ul>{appendix_links}</ul>",
         encoding="utf-8",
     )
 
