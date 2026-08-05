@@ -16,7 +16,7 @@
 - GRPO group size 固定为 8；训练期间的 reward 只使用数学答案正确性与规定的格式检查。
 - response 上限固定为 `max_new_tokens=1536`；主分析排除 truncated rollout，并单独报告截断率。
 - 训练 checkpoint 固定为 `base / 20% / 40% / 60% / 80% / final` 六个位置。
-- 每个 checkpoint 对相同的 256 道 held-out 题各生成 4 条评估 rollout，总评估规模为 `6 x 256 x 4 = 6144` 条。
+- 每个 checkpoint 对相同的 256 道 held-out 题各生成 8 条评估 rollout，总评估规模为 `6 x 256 x 8 = 12288` 条。
 - 评估题、prompt template、temperature、top-p、最大长度和每条 rollout 的随机种子表在第一次评估前冻结，所有 checkpoint 完全复用。
 - hidden 指标只计算生成 response，不包含 system prompt、user prompt 或 padding。
 - 轨迹主规格已冻结为 `window=128, stride=32`；`mean_w128_s32` 为主表示，`last_s32` 为预注册敏感性表示，不允许事后选择效果更好的表示作为主结果。
@@ -81,7 +81,7 @@ Level 3-5 用来减少 group 内全对或全错。GRPO 若一个 group 的 8 条
 
 - 从 MATH test split 固定抽取 256 题。
 - 按 `level x subject` 分层抽样；同一题在六个 checkpoint 中重复使用。
-- 每个 checkpoint 每题生成 4 条 rollout，但不同 checkpoint 不共享生成随机数状态；保存预先生成的 `question_id x rollout_slot x checkpoint` seed 表。
+- 每个 checkpoint 每题生成 8 条 rollout；`rollout_slot` 固定为 `0..7`，但不同 checkpoint 不共享生成随机数状态；保存预先生成的 `question_id x rollout_slot x checkpoint` seed 表。
 - evaluation cohort 不参与 GRPO 参数更新，也不用于 checkpoint selection。
 
 ### 2.3 模型与训练
@@ -896,7 +896,7 @@ AUDIT.json
 ## 13. 资源与存储
 
 - 正式 GRPO 与 hidden extraction 分开运行；discovery 阶段不在训练 loss 内打开 `output_hidden_states`。
-- 六个 checkpoint 的评估 rollout 总数固定为 6,144；同一 rollout 的 mean/last 与全部层指标来自一次离线 forward。
+- 六个 checkpoint 的评估 rollout 总数固定为 12,288；同一 rollout 的 mean/last 与全部层指标来自一次离线 forward。
 - hidden tensors 只驻留显存/内存直到标量归约完成；不永久保存全 token x layer x hidden-dimension 数据。
 - 永久保存：标量 Parquet、coverage、base common/calibrator、固定少量 audit question 的 pooled vectors、模型与 tokenizer revision、完整 frozen config。
 - H200 正式任务必须运行在命名 tmux 中，日志定期 flush，支持按 checkpoint 断点恢复。
@@ -951,9 +951,9 @@ AUDIT.json
 
 ### Task 3: 固定 cohort rollout
 
-**Deliverable:** 6,144 条 rollout、正确性标签与全部控制量。
+**Deliverable:** 12,288 条 rollout、正确性标签与全部控制量。
 
-- [ ] 对 base checkpoint 运行固定 256 x 4 rollout 并冻结输出 schema。
+- [ ] 对 base checkpoint 运行固定 256 x 8 rollout 并冻结输出 schema。
 - [ ] 依次运行 20% 到 final checkpoints，不改变任何 decoding 参数。
 - [ ] 逐 checkpoint 校验题数、rollout slot、seed、truncation 与 reward。
 - [ ] 生成 `rollout_status.parquet` 和 generation audit。
@@ -994,7 +994,7 @@ AUDIT.json
 
 本 discovery 实验只有在以下条件全部满足时才算完成：
 
-- 六个冻结 checkpoint 与 6,144 条固定 cohort rollout 完整；
+- 六个冻结 checkpoint 与 12,288 条固定 cohort rollout 完整；
 - 16 个代表量在四 stages 上均有 coverage 报告；H1-H7 在四个 anchor 和两种 representations 上报告，H8 的 final primary 与逐层探索 profile 分开报告；
 - base common/calibrator 只由 base checkpoint、label-blind 数据构造并在后续冻结；
 - 主趋势经过 length 与 policy entropy 控制并完成 BH-FDR；
