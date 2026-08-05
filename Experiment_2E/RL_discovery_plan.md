@@ -4,7 +4,7 @@
 
 **Goal:** 在纯文本、短 response 的标准 GRPO 训练中，系统测量 hidden state 沿 response 时间轴的横向轨迹动力学和沿 Transformer 深度轴的纵向表示变换，定位这些量在回答不同阶段随训练发生的变化，并筛选可进入多 seed 验证和 process-reward 实验的内部信号。
 
-**Architecture:** 使用 `Qwen2.5-7B-Instruct` 在 MATH 上进行单 seed 标准 GRPO discovery run。固定一组 held-out 题，在 base 与五个训练 checkpoint 上用相同 decoding 生成多条 rollout，再离线 forward 一次性取得所有层 hidden states；以 128-token window、32-token stride 构造 `mean` 与 `last` 两种表示，在线归约为标量，不永久保存完整 token hidden states。`stride=32` 已由正式训练前的 length-only smoke 按第 3.1 节冻结。
+**Architecture:** 使用 `Qwen2.5-7B-Instruct` 在 MATH 上进行单 seed 标准 GRPO discovery run。固定一组 held-out 题，在 base 与五个训练 checkpoint 上用相同 decoding 生成多条 rollout，再离线 forward 一次性取得所有层 hidden states；以 128-token window、32-token stride 构造 `mean` 与 `last` 两种表示，在线归约为标量，不永久保存完整 token hidden states。横向几何在四个冻结层锚点 `L3/L12/L24/Lfinal` 分别计算，纵向使用完整深度；token-level H8 以最终层为主并保留逐层探索 profile。`stride=32` 已由正式训练前的 length-only smoke 按第 3.1 节冻结。
 
 **Tech Stack:** Python、PyTorch、Transformers、标准 GRPO/veRL 训练栈、vLLM rollout、NumPy/SciPy、pandas/Parquet、scikit-learn/statsmodels、Matplotlib/Seaborn。
 
@@ -20,6 +20,8 @@
 - 评估题、prompt template、temperature、top-p、最大长度和每条 rollout 的随机种子表在第一次评估前冻结，所有 checkpoint 完全复用。
 - hidden 指标只计算生成 response，不包含 system prompt、user prompt 或 padding。
 - 轨迹主规格已冻结为 `window=128, stride=32`；`mean_w128_s32` 为主表示，`last_s32` 为预注册敏感性表示，不允许事后选择效果更好的表示作为主结果。
+- 横向 H1-H7 的深度锚点固定为 `L3 / L12 / L24 / Lfinal`；四层均报告，不得在结果后按效果选择单层。`Lfinal` 从 `model.config.num_hidden_layers` 读取。
+- H8 的最终层为单一 primary view；H8 锚点层与全层 profile 只作探索性定位，不增加主假设。
 - 所有四个 response 阶段都报告；`75%-100%` 作为 terminal-control，process-reward 候选优先来自 `0%-75%`。
 - response length、policy/token entropy、mean log probability、hidden norm、correctness 和 truncation 是强制控制变量。
 - 不因 discovery 结果修改 checkpoint、stage、window、stride、aggregation、指标符号或统计检验；任何新增分析只能标记为 post-hoc exploratory。
@@ -42,7 +44,7 @@
 \{\text{horizontal},\text{vertical}\}.
 \]
 
-- **Horizontal dynamics：** response 沿 token/chunk 时间推进时，hidden state 在表示空间中移动多远、覆盖多少方向、是否转向、绕路或收敛。
+- **Horizontal dynamics：** response 沿 token/chunk 时间推进时，hidden state 在表示空间中移动多远、覆盖多少方向、是否转向、绕路或收敛；这些轨迹分别在冻结的浅层、中层、深层和最终层测量，以观察语义几何在网络深度上的形成过程。
 - **Vertical dynamics：** 同一个 chunk 的表示沿 Transformer layers 被如何重写，变换是集中在少数层还是分散在多层，层间路径是否连贯。
 
 “横向更接近语义探索、纵向更接近逻辑深入”只作为待检验机制假设，不在发现实验之前当作事实。
@@ -157,7 +159,15 @@ W_k=[\max(1,e_k-127),e_k],
 x^{last}_{k,l}=h_{e_k,l}.
 \]
 
-- Horizontal 主层为最后一层 \(l=L\)。
+- `hidden_states[0]` 是 embedding 输出；Transformer block 输出按其 block 编号索引。横向锚点固定为：
+
+  \[
+  \mathcal L_h=\{3,12,24,L\},
+  \qquad L=\texttt{model.config.num\_hidden\_layers}.
+  \]
+
+  下文 `L3/L12/L24/Lfinal` 分别指这四个 block 输出。对每个 \(l\in\mathcal L_h\)，H1-H7 独立使用轨迹 \(x_{1,l},\ldots,x_{K,l}\) 计算；`anchor_layer` 是预先冻结的分析因子，不得事后选层。
+- H8 以 \(l=L\) 为 primary；四个锚点及 \(l=0,\ldots,L\) 的全层 profile 仅用于探索性定位。
 - Vertical 使用所有 \(l=0,\ldots,L\)。
 - `mean_w128_s32` 是 primary representation。
 - `last_s32` 是 sensitivity representation。
@@ -192,7 +202,7 @@ M^{local}_{sqi,b}
 \operatorname{Agg}_{k:p_k\in B_b}m_{sqi,k}.
 \]
 
-适用于 movement、turning、angular velocity、length-weighted turning、vertical activity、vertical angle 和 entropy。
+适用于 movement、turning、angular velocity、length-weighted turning、layer-update norm、vertical angle、layer-update turning 与 entropy。
 
 ### 5.2 Cumulative-prefix 指标
 
@@ -226,15 +236,21 @@ M^{cum}_{sqi,b}-M^{cum}_{sqi,b-1}.
 - ER：至少 2 个非重复状态点；
 - ERV：至少 2 个 prefix metric 点；
 - ERA：至少 3 个 prefix metric 点；
-- vertical path/angle/ER：至少 3 个有效 layer states，且层间位移 norm 超过数值阈值。
+- H1-H7：上述横向 coverage 对四个 `anchor_layer` 分别判断，不因某一 anchor 缺失而删除其他 anchor；
+- H8 token state entropy：window 内至少 1 个有效 token scalar；time-diff entropy：window 内至少 1 个有效相邻 token difference，stage 内至少 1 个有效 window；
+- layer-update norm / layer-difference entropy：至少 1 个有效 layer update；
+- raw activation / centered state / robust-z entropy：至少 1 个有效 layer state；
+- raw state angle / demean state angle：至少 2 个有效相邻 layer states；
+- layer-update turning angle：至少 2 个连续、norm 超过阈值的 layer updates，即至少 3 个有效 layer states；
+- vertical path / vertical ER：至少 3 个有效 layer states，且层间位移 norm 超过数值阈值。
 
 不能用一个全局 complete-case gate 丢掉所有存在局部缺失的 rollout。每张图和每个 cell 都必须标注有效 rollout 数与有效 question 数。
 
 ---
 
-## 6. 横向 7 个指标家族
+## 6. 横向 8 个指标家族
 
-以下用最后一层轨迹点 \(x_k=x_{k,L}\)。定义相邻位移、长度和单位方向：
+对 H1-H7，以下定义在每个冻结锚点 \(l\in\mathcal L_h\) 独立执行；为简洁起见省略 layer 下标，写作 \(x_k=x_{k,l}\)。每个输出都记录 `anchor_layer`。H8 是 token-level 家族，最终层为 primary，锚点/全层结果只作探索性 profile。定义相邻位移、长度和单位方向：
 
 \[
 d_k^h=x_k-x_{k-1},
@@ -252,6 +268,14 @@ norm 低于冻结阈值的位移不参与角度计算，并报告排除率；不
 r_k^h=\|d_k^h\|_2,
 \]
 
+为消除 hidden dimension \(D\) 对绝对欧氏距离的机械影响，同时保存每坐标 RMS 位移：
+
+\[
+r_{k,rms}^h
+=
+\frac{\|d_k^h\|_2}{\sqrt D}.
+\]
+
 \[
 r_{k,rel}^h
 =
@@ -259,7 +283,7 @@ r_{k,rel}^h
 {\|x_{k-1}\|_2+\epsilon}.
 \]
 
-每 stage 保存 mean、median、P90；primary representative 为 `median_relative_movement`。
+每 stage 对 raw movement、RMS movement 与 relative movement 分别保存 mean、median、P90；primary representative 仍冻结为 `median_relative_movement`。`r_{k,rms}^h` 是跨 hidden dimension 可比的绝对 movement 诊断量，不替代 relative primary。
 
 ### H2. Path geometry
 
@@ -315,19 +339,27 @@ x_1\\x_2\\\vdots\\x_k
 \end{bmatrix}.
 \]
 
-设其非零奇异值为 \(\sigma_j\)：
+对每个 prefix 先在轨迹点维度中心化：
+
+\[
+\bar x_k=\frac1k\sum_{a=1}^k x_a,
+\qquad
+Z_{1:k}^{h,c}=Z_{1:k}^{h}-\mathbf 1\bar x_k^\top.
+\]
+
+设 \(Z_{1:k}^{h,c}\) 的非零奇异值为 \(\sigma_j\)：
 
 \[
 p_j=\frac{\sigma_j}{\sum_r\sigma_r},
 \qquad
-ER_k^h
+ER_k^{h,c}
 =
 \exp\left(-\sum_jp_j\log(p_j+\epsilon)\right).
 \]
 
-ER primary 跟随 ER/VERL 的未中心化 hidden-matrix 定义；trajectory-centered ER 只作敏感性分析，不进入 13 个代表量。
+Primary ER 使用 \(ER_k^{h,c}\)；因此 centered prefix ER 序列进入 ERV/ERA。该口径与 VERL 附录的 mean-centered Gram 实现一致。未中心化 ER/ERV/ERA 作为 sensitivity 完整保存，但不进入 16 个代表量。
 
-令 \(m_j=ER_j^h\)，历史偏差为：
+令 \(m_j=ER_j^{h,c}\)，历史偏差为：
 
 \[
 \delta_j
@@ -345,7 +377,7 @@ ERA
 \frac{1}{K-2}\sum_{j=3}^{K}(\delta_j-\delta_{j-1}).
 \]
 
-Primary representative 为 cumulative `ERV`；ER 与 ERA 必须同时画出，防止把 ERV 单独解释成 exploration 或 exploitation。
+Primary representative 为 cumulative `centered_ERV`；`centered_ER_final` 与 `centered_ERA` 必须同时画出，防止把 ERV 单独解释成 exploration 或 exploitation。对应的 uncentered 三量仅作 sensitivity。
 
 ### H6. Length-weighted directional ER
 
@@ -385,9 +417,47 @@ T_{weighted}^h
 
 它回答“大幅移动的位置是否也发生大转向”，与“全局用了多少个方向”的 directional ER 不同。Primary representative 为 stage-local `weighted_turning`。
 
+### H8. Token-level entropy dynamics
+
+对任意 token hidden state \(h_{t,l}\in\mathbb R^D\)，定义坐标中心化能量熵：
+
+\[
+\tilde h_{t,l,j}=h_{t,l,j}-\frac1D\sum_{m=1}^{D}h_{t,l,m},
+\qquad
+p_{t,l,j}=\frac{\tilde h_{t,l,j}^2}{\sum_m\tilde h_{t,l,m}^2+\epsilon},
+\]
+
+\[
+H_{state}^{coord}(t,l)
+=
+-\frac{\sum_j p_{t,l,j}\log(p_{t,l,j}+\epsilon)}{\log D}.
+\]
+
+相邻 token 的时间差分与其坐标中心化熵为：
+
+\[
+\Delta h_{t,l}=h_{t,l}-h_{t-1,l},
+\qquad
+H_{time\text{-}diff}^{coord}(t,l)=H_{state}^{coord}(\Delta h_{t,l}).
+\]
+
+另存真正未中心化的 state raw-energy entropy：
+
+\[
+H_{state}^{raw}(t,l)
+=
+-\frac{\sum_j q_{t,l,j}\log(q_{t,l,j}+\epsilon)}{\log D},
+\qquad
+q_{t,l,j}=\frac{h_{t,l,j}^2}{\sum_mh_{t,l,m}^2+\epsilon}.
+\]
+
+对每个 128-token window（stride 32）内的 token scalar 取 median，得到局部 chunk 值；再按第 5.1 节在 stage 内聚合。H8 primary 是最终层 \(l=L\) 的 `median_token_time_diff_coordinate_entropy`。`token_state_coordinate_entropy` 是与旧 Experiment04 `token_raw_entropy` 同算子但更清晰命名的对照；`token_state_raw_energy_entropy` 保留持续高激活坐标的影响。二者均完整保存，但不增加 primary family。H8 token scalar 只计算一次，`representation=token`，不得随 `mean/last` chunk representation 重复。
+
+所有层与四个锚点的 H8 profile 输出 `layer x stage x checkpoint` 曲线/热图，仅用于探索性深度定位；不得据此事后替换最终层 primary。
+
 ---
 
-## 7. 纵向 6 个指标家族
+## 7. 纵向 8 个指标家族
 
 对每个 chunk endpoint 和 representation，记所有层 pooled state 为：
 
@@ -403,7 +473,7 @@ d_{k,l}^v=y_{k,l}-y_{k,l-1},
 \qquad l=1,\ldots,L.
 \]
 
-### V1. Vertical activity
+### V1. Layer-update norm
 
 \[
 a_{k,l}=\|d_{k,l}^v\|_2,
@@ -423,25 +493,9 @@ C_k^v
 {\sum_la_{k,l}+\epsilon}.
 \]
 
-Primary representative 为 stage 内 `P90(relative_vertical_activity)`。
+Primary representative 为 stage 内 `P90(relative_layer_update_norm)`；raw norm、across-layer mean/median/P90、maximum layer 与 concentration 同时保存。
 
-### V2. Vertical path geometry
-
-\[
-L_k^v=\sum_l\|d_{k,l}^v\|_2,
-\qquad
-N_k^v=\left\|\sum_ld_{k,l}^v\right\|_2,
-\]
-
-\[
-S_k^v=\frac{N_k^v}{L_k^v+\epsilon},
-\qquad
-D_k^v=\log(L_k^v+\epsilon)-\log(N_k^v+\epsilon).
-\]
-
-Primary representative 为 stage 内 median `vertical_straightness`；\(L^v,N^v,D^v\) 同时报告。
-
-### V3. Vertical state angle
+### V2. Raw state angle
 
 Raw angle：
 
@@ -452,6 +506,8 @@ Raw angle：
 \cos(y_{k,l},y_{k,l-1})
 \right).
 \]
+
+### V3. State angle demean
 
 在 base checkpoint 的完整 evaluation cohort 上，对每个 representation 和 layer 计算 label-blind、rollout-equal common：
 
@@ -478,9 +534,66 @@ y_{k,l-1}-\mu_{r,l-1}^{base})
 \right).
 \]
 
-Primary representative 为 stage 内、across-layer 的 `median_state_angle_demean`；raw angle 是必须报告的对照。
+Raw angle 与 demean angle 均作为独立主指标：其 primary representative 分别为 stage 内、across-layer 的 `median_raw_state_angle` 与 `median_state_angle_demean`。
 
-### V4. Coordinate energy entropy
+### V4. Layer-update turning angle
+
+对连续两次 layer update 的单位方向：
+
+\[
+v_{k,l}=
+\frac{d_{k,l}^v}{\|d_{k,l}^v\|_2+\epsilon},
+\qquad l=1,\ldots,L,
+\]
+
+定义：
+
+\[
+\theta_{k,l}^{v,update}
+=
+\arccos\left(
+\operatorname{clip}(v_{k,l}^{\top}v_{k,l-1},-1,1)
+\right),
+\qquad l=2,\ldots,L.
+\]
+
+norm 低于冻结阈值的 update 不进入角度计算，也不把零 update 的角度设为 0；必须报告排除率。该量回答“第 \(l\) 层的写入方向是否延续第 \(l-1\) 层的写入方向”，不同于 V2/V3 的 state angle。每个 stage 保存 mean、median、P90 与 standard deviation；primary representative 为 `median_layer_update_turning_angle`。
+
+### V5. Vertical path metrics
+
+\[
+L_k^v=\sum_l\|d_{k,l}^v\|_2,
+\qquad
+N_k^v=\left\|\sum_ld_{k,l}^v\right\|_2,
+\]
+
+\[
+S_k^v=\frac{N_k^v}{L_k^v+\epsilon},
+\qquad
+D_k^v=\log(L_k^v+\epsilon)-\log(N_k^v+\epsilon).
+\]
+
+Primary representative 为 stage 内 median `vertical_straightness`；\(L^v,N^v,D^v\) 同时报告。
+
+### V6. Raw activation entropy
+
+对未中心化的 hidden state \(y_{k,l}\in\mathbb R^D\)，直接将坐标平方作为能量：
+
+\[
+e_j=y_{k,l,j}^2,
+\qquad
+p_j=\frac{e_j}{\sum_m e_m+\epsilon},
+\]
+
+\[
+H_{raw}(y_{k,l})
+=
+-\frac{\sum_jp_j\log(p_j+\epsilon)}{\log D}.
+\]
+
+这里不减 token 内 coordinate mean，也不使用 base 校准，因此保留持续高激活坐标的影响。每个 stage 保存 across-layer mean、median、P90；primary representative 为 `median_raw_activation_entropy`。
+
+### V7. Centered state, layer-difference, and robust-z entropy
 
 对任意向量 \(z\in\mathbb R^D\)，先做向量内部 coordinate mean centering：
 
@@ -503,16 +616,16 @@ H_c(z)
 分别计算：
 
 \[
-H_{state}(k,l)=H_c(y_{k,l}),
+H_{centered\_state}(k,l)=H_c(y_{k,l}),
 \]
 
 \[
 H_{\Delta v}(k,l)=H_c(d_{k,l}^v).
 \]
 
-Primary representative 为 stage 内 `median(layer_difference_entropy)`；state entropy 用于区分“状态本身展开”与“当前层新写入展开”。
+state entropy 用于区分“状态本身展开”与“当前层新写入展开”。
 
-### V5. Robust z-score entropy
+#### Robust z-score entropy
 
 在 base checkpoint evaluation cohort 上，按 representation、layer、coordinate 计算 label-blind 的 \(\mu^{base}_{r,l,j}\) 与 \(\sigma^{base}_{r,l,j}\)，冻结并复用于所有 checkpoint：
 
@@ -528,9 +641,9 @@ z'_{k,l,j}
 
 直接以 \((z'_{k,l,j})^2\) 构造概率并计算归一化能量熵，不再做 token 内 coordinate mean centering。必须报告 low-variance coordinate fraction。
 
-Primary representative 为 stage 内 `median(robust_z_entropy)`。它是 rogue-dimension 敏感性控制，不能覆盖或替代 V4。
+本家族的 primary representative 为 stage 内 `median(layer_difference_entropy)`。`centered_state_entropy` 与 `robust_z_entropy` 均完整保存：前者是 V6 raw entropy 的中心化对照，后者是 rogue-dimension 敏感性控制；二者不替代 V6 或 layer-difference entropy 进入主检验。
 
-### V6. Vertical effective rank
+### V8. Vertical effective rank
 
 Layer-state matrix：
 
@@ -539,6 +652,14 @@ Z_k^v=
 \begin{bmatrix}
 y_{k,0}\\y_{k,1}\\\vdots\\y_{k,L}
 \end{bmatrix}.
+\]
+
+Centered layer-state matrix：
+
+\[
+\bar y_k=\frac1{L+1}\sum_{l=0}^{L}y_{k,l},
+\qquad
+Z_{k}^{v,c}=Z_k^v-\mathbf1\bar y_k^\top.
 \]
 
 Layer-update matrix：
@@ -550,29 +671,42 @@ d_{k,1}^v\\d_{k,2}^v\\\vdots\\d_{k,L}^v
 \end{bmatrix}.
 \]
 
-对二者使用与 H5 相同的奇异值 effective-rank 定义。Primary representative 为 stage 内 `median(layer_update_ER)`；layer-state ER 同时保存但不作为主代表量。
+`layer_state_ER` 对 \(Z_k^{v,c}\) 计算，消除所有层共有的 residual offset。`layer_update_ER` 对未中心化 \(Z_{k,\Delta}^{v}\) 计算，仍是 primary representative：相邻层差分已消除 common state offset，而继续减平均 update 会使每层完全相同的有效写入退化为零矩阵。
+
+另存 centered update sensitivity：
+
+\[
+\bar d_k=\frac1L\sum_{l=1}^{L}d_{k,l}^v,
+\qquad
+Z_{k,\Delta}^{v,c}=Z_{k,\Delta}^{v}-\mathbf1\bar d_k^\top,
+\]
+
+并报告 `layer_update_ER_centered`。Primary representative 为 stage 内 `median(layer_update_ER)`；centered `layer_state_ER`、`layer_state_ER_uncentered_sensitivity` 与 centered update ER 均为解释性输出。
 
 ---
 
-## 8. 13 个预注册代表量
+## 8. 16 个预注册代表量
 
-完整 scalar 全部保存，但多重检验的主 discovery family 只使用下列 13 个代表量：
+完整 scalar 全部保存，但多重检验的主 discovery family 只使用下列 16 个代表量。H1-H7 在四个冻结 `anchor_layer` 上分别形成预注册子检验；H8 只有最终层进入主 family。
 
-| ID | Axis | Family | Representative | Stage mode |
-|---|---|---|---|---|
-| H1 | horizontal | movement | median relative movement | local |
-| H2 | horizontal | path | straightness | local + cumulative |
-| H3 | horizontal | turning | median turn angle | local |
-| H4 | horizontal | angular velocity | P90 absolute angular velocity | local |
-| H5 | horizontal | state ER dynamics | ERV | cumulative |
-| H6 | horizontal | directional spectrum | directional ER | cumulative |
-| H7 | horizontal | length-angle coupling | weighted turning | local |
-| V1 | vertical | activity | P90 relative vertical activity | local |
-| V2 | vertical | path | median vertical straightness | local |
-| V3 | vertical | state angle | median demean state angle | local |
-| V4 | vertical | entropy | median layer-difference entropy | local |
-| V5 | vertical | robust entropy | median robust z entropy | local |
-| V6 | vertical | vertical spectrum | median layer-update ER | local |
+| ID | Axis | Family | Representative | Depth scope | Stage mode |
+|---|---|---|---|---|---|
+| H1 | horizontal | movement | median relative movement | L3/L12/L24/Lfinal | local |
+| H2 | horizontal | path | straightness | L3/L12/L24/Lfinal | local + cumulative |
+| H3 | horizontal | turning | median turn angle | L3/L12/L24/Lfinal | local |
+| H4 | horizontal | angular velocity | P90 absolute angular velocity | L3/L12/L24/Lfinal | local |
+| H5 | horizontal | centered state ER dynamics | centered ERV | L3/L12/L24/Lfinal | cumulative |
+| H6 | horizontal | directional spectrum | directional ER | L3/L12/L24/Lfinal | cumulative |
+| H7 | horizontal | length-angle coupling | weighted turning | L3/L12/L24/Lfinal | local |
+| H8 | horizontal | token entropy dynamics | median token time-diff coordinate entropy | Lfinal primary | local |
+| V1 | vertical | layer-update norm | P90 relative layer-update norm | all layers | local |
+| V2 | vertical | raw state angle | median raw state angle | all layers | local |
+| V3 | vertical | demean state angle | median state angle demean | all layers | local |
+| V4 | vertical | layer-update turning | median layer-update turning angle | all layers | local |
+| V5 | vertical | path | median vertical straightness | all layers | local |
+| V6 | vertical | raw activation entropy | median raw activation entropy | all layers | local |
+| V7 | vertical | centered/difference/robust entropy | median layer-difference entropy | all layers | local |
+| V8 | vertical | vertical spectrum | median layer-update ER | all layers | local |
 
 其他 mean/median/P90、raw/relative、state/update、ER/ERA、\(L/N/D\) 是解释性输出，不得替代代表量进入主统计后再选择最显著者。
 
@@ -585,9 +719,12 @@ d_{k,1}^v\\d_{k,2}^v\\\vdots\\d_{k,L}^v
 - `response_token_count`；
 - `stage_token_count`；
 - `trajectory_point_count`；
+- `anchor_layer`（H1-H7 使用 `L3/L12/L24/Lfinal`；H8 primary 使用 `Lfinal`）；
 - `valid_displacement/turn/omega_count`；
+- `valid_vertical_update/state_angle/update_turn_count` 与 update-turn 排除率；
 - `policy_entropy_mean` 与 stage-local policy entropy；
 - `token_logprob_mean`；
+- `token_time_diff_coordinate_entropy / token_state_coordinate_entropy / token_state_raw_energy_entropy` 的窗口与 stage coverage；
 - `hidden_norm_mean`；
 - `answer_reward / format_reward / is_correct`；
 - `finish_reason / truncated`；
@@ -604,20 +741,20 @@ Policy entropy 是词表分布熵，与 coordinate energy entropy 必须使用�
 
 ### 10.1 Base-calibrated 标准化
 
-对每个代表量、representation 和 stage，只使用 base checkpoint non-truncated rollout 估计：
+对每个代表量、representation、`anchor_layer`（若适用）和 stage，只使用 base checkpoint non-truncated rollout 估计：
 
 \[
-zM_{sqi,b}
+zM_{sqi,b,l}
 =
-\frac{M_{sqi,b}-\mu^{base}_{M,r,b}}
-{\sigma^{base}_{M,r,b}+\epsilon}.
+\frac{M_{sqi,b,l}-\mu^{base}_{M,r,b,l}}
+{\sigma^{base}_{M,r,b,l}+\epsilon}.
 \]
 
 该 calibrator 冻结后用于所有 checkpoint，不按 checkpoint 重新归一化，否则会抹掉训练漂移。
 
 ### 10.2 主趋势模型
 
-对 13 个 primary representatives 分别拟合：
+对 V1-V8、H8(final) 及每个 H1-H7 `metric x anchor_layer` 预注册子检验分别拟合：
 
 \[
 zM
@@ -634,6 +771,7 @@ training\_progress
 
 - `training_progress` 取 \(0,0.2,0.4,0.6,0.8,1.0\)。
 - `stage` 是四水平 categorical variable。
+- 对 H1-H7 额外拟合联合深度模型 `... + anchor_layer + training_progress x anchor_layer + stage x anchor_layer`，用于报告信号随网络深度形成的方式；四个 anchor 不得按效应大小筛选后单独宣告发现。
 - question 作为随机截距；若 mixed model 数值失败，使用 question fixed effects 并按 question cluster-robust SE。
 - 主要问题是 `training_progress x stage`，即不同 response 阶段的训练趋势是否不同。
 
@@ -655,9 +793,9 @@ training\_progress
 
 ### 10.5 多重检验
 
-- 13 个代表量的 `training_progress x stage` omnibus p 值构成主 discovery family，使用 Benjamini-Hochberg FDR，阈值 `q <= 0.10`。
+- 主 discovery family 包含 V1-V8、H8(final) 与 H1-H7 的四个冻结 anchor 子检验，共 \(8+1+7\times4=37\) 个 `training_progress x stage` omnibus p 值；使用 Benjamini-Hochberg FDR，阈值 `q <= 0.10`。
 - correct/wrong outcome family 单独做 BH-FDR，不与训练趋势 family 混合。
-- `mean` 是主规格；`last` 不单独用于宣告发现，只检验方向和曲线形状是否一致。
+- H1-H7 的 `mean` 是主规格，`last` 不单独用于宣告发现，只检验方向和曲线形状是否一致；H8 为 `representation=token`，不参加 mean/last 比较。
 - 其余 scalar、单 cell、单 checkpoint 结果均为 descriptive exploratory，不进入主发现计数。
 
 ---
@@ -670,9 +808,10 @@ training\_progress
 2. **Training relevance：** stage-specific training trend 或 `training_progress x stage` 在主 family 中通过 `q <= 0.10`。
 3. **Control robustness：** 加入 response length 与 policy entropy 后，效应方向不翻转，且调整后 CI 不完全覆盖一个接近零的宽区间。
 4. **Outcome consistency：** correct/wrong gap 与随训练改善的方向相容；若二者相反，标记为 policy diagnostic，不进入 reward shaping。
-5. **Representation robustness：** mean primary 与 last sensitivity 的主要趋势方向一致；last 可以更弱，但不能稳定反向。
-6. **Coverage：** 结论不是由少量超长 response 或少数有效 cell 驱动；按 trajectory-point count 与 response length 分层后方向稳定。
-7. **Question robustness：** leave-one-question-out 与 question bootstrap 不由单题主导。
+5. **Representation robustness：** H1-H7 的 mean primary 与 last sensitivity 的主要趋势方向一致；last 可以更弱，但不能稳定反向。H8 是 representation-independent。
+6. **Depth reporting：** H1-H7 必须报告全部四个冻结 anchor；后续若冻结单层候选，必须明确其是 discovery localization，不能表述为全层普遍规律。
+7. **Coverage：** 结论不是由少量超长 response 或少数有效 cell 驱动；按 trajectory-point count 与 response length 分层后方向稳定。
+8. **Question robustness：** leave-one-question-out 与 question bootstrap 不由单题主导。
 
 候选分类：
 
@@ -702,12 +841,12 @@ A_i^{outcome}
 
 ### 12.1 主图
 
-1. **Training x response-stage heatmap：** 每个代表量一张 `checkpoint x B1-B4` base-standardized heatmap。
-2. **Stage curves：** B1/B2/B3/B4 四条线随 checkpoint 的变化，question-bootstrap 95% CI。
+1. **Training x response-stage heatmap：** 每个代表量一张 `checkpoint x B1-B4` base-standardized heatmap；H1-H7 按四个冻结 anchor 分面。
+2. **Stage curves：** B1/B2/B3/B4 四条线随 checkpoint 的变化，question-bootstrap 95% CI；H1-H7 同图展示 L3/L12/L24/Lfinal 四条深度曲线。
 3. **Correct/wrong stage curves：** 每 checkpoint 的 correct 与 wrong 曲线，以及 standardized gap。
-4. **Two-axis summary：** 7 个 horizontal 与 6 个 vertical 代表量的 adjusted training-stage interaction effect heatmap。
+4. **Two-axis summary：** 8 个 horizontal 与 8 个 vertical 代表量的 adjusted training-stage interaction effect heatmap；H1-H7 显示四 anchor 的完整小面板，H8 同时给出全层探索 profile。
 5. **Control comparison：** raw trend、控制 length 后、再控制 policy entropy 后的系数并列图。
-6. **Horizontal-vertical coupling：** 13 个代表量的 residual correlation matrix，先回归掉 checkpoint、stage、length、policy entropy。
+6. **Horizontal-vertical coupling：** 16 个代表量的 residual correlation matrix，先回归掉 checkpoint、stage、length、policy entropy；H1-H7 的四 anchor correlation 另作深度分面，不从中挑最大值作为结论。
 
 ### 12.2 诊断图
 
@@ -750,7 +889,7 @@ REPORT.html
 AUDIT.json
 ```
 
-所有 Parquet 至少包含：`run_id, checkpoint, question_id, rollout_id, representation, stage, metric, value, coverage, is_correct, response_length, policy_entropy`。
+所有 Parquet 至少包含：`run_id, checkpoint, question_id, rollout_id, representation, anchor_layer, stage, metric, value, coverage, is_correct, response_length, policy_entropy`。H8 的 `representation=token`，并在 `anchor_layer` 中记录实际层；H1-H7 只出现四个冻结 anchor。
 
 ---
 
@@ -762,7 +901,7 @@ AUDIT.json
 - 永久保存：标量 Parquet、coverage、base common/calibrator、固定少量 audit question 的 pooled vectors、模型与 tokenizer revision、完整 frozen config。
 - H200 正式任务必须运行在命名 tmux 中，日志定期 flush，支持按 checkpoint 断点恢复。
 - 上机前通过 hidden smoke 实测“每 100 条 rollout 的 forward 时间、峰值显存、标量输出大小”，再据此给出正式 ETA；计划阶段不根据 long-CoT 旧实验速度外推。
-- mean/last 两种表示不会导致两次模型 forward；13 个家族主要增加归约计算，不应按 2 倍 GPU forward 估算。
+- mean/last 两种表示与四个 horizontal anchor 不会导致额外模型 forward；16 个代表量和 H8 全层 scalar 主要增加在线归约、SVD 与 Parquet 体积，不应按多倍 GPU forward 估算。hidden smoke 必须单独报告 token-level H8 的归约时间。
 
 ---
 
@@ -774,9 +913,13 @@ AUDIT.json
 - 走出再返回起点：\(L>0\)、\(N\approx0\)、straightness 接近 0、log-detour 为有限大值且无 Inf。
 - 两个等长正交方向：directional ER = 2（数值容差内）。
 - 所有 movement 同一方向：directional ER = 1。
-- 单坐标能量：coordinate entropy = 0；所有坐标等能量：normalized entropy = 1。
+- 单坐标能量：raw activation entropy、centered entropy 与 layer-difference entropy 均为 0；所有坐标等能量时 normalized entropy = 1。
+- 连续两次相同的非零 layer update：layer-update turning angle = 0；两次正交 update：该角为 \(\pi/2\)（数值容差内）。
 - 对全部 hidden state 加同一平移：horizontal displacement/path/turn 不变。
 - 对全部 hidden state 乘正比例常数：angle、straightness、directional ER、normalized entropy 不变；raw movement/path 按比例变化。
+- H5 centered ER：对每条 prefix 的全部轨迹点加同一向量，centered ER/ERV/ERA 不变；uncentered sensitivity 允许变化。
+- V8：对 layer state 加同一向量不改变 centered `layer_state_ER`；完全相同的非零 layer updates 使 raw `layer_update_ER` 接近 1，而 centered update ER 按 coverage 规则记缺失。
+- H8：含至少两个 token 的恒定 hidden trajectory，其 time-diff entropy 按零能量规则记 0；没有相邻 token 的 window 才记缺失。coordinate-centered state entropy 与未中心化 raw-energy entropy 在公共偏移存在时可不同；token scalar 不因 `mean/last` 重复写出。
 - 零位移：角度记缺失并增加 exclusion count，不产生 NaN 传播到无关指标。
 - 每种最小 coverage 边界：point count 恰好达到与少于门槛时状态正确。
 - stage boundary：endpoint 恰好等于 25%、50%、75%、100% 时只进入一个冻结 stage。
@@ -820,16 +963,16 @@ AUDIT.json
 **Deliverable:** horizontal/vertical scalar Parquet 与 base calibrators。
 
 - [ ] 通过 2 x 2 x 2 hidden smoke 验证 response 边界和层数。
-- [ ] 先处理 base checkpoint，冻结 label-blind common、z-score stats 与 stage calibrators。
+- [ ] 先处理 base checkpoint，冻结 label-blind common、按 `anchor_layer` 的 z-score stats 与 stage calibrators。
 - [ ] 处理其余五个 checkpoint，禁止重新拟合 common/calibrator。
 - [ ] 每批释放 full hidden tensors，校验无 OOM、NaN、Inf 或重复 rollout。
-- [ ] 合并 metric-specific coverage，并验证两种 representation 来自同一 forward。
+- [ ] 合并 metric-specific coverage，验证两种 representation 与四个 horizontal anchor 来自同一 forward，并验证 H8 token scalar 未按 representation 重复。
 
 ### Task 5: 主统计与可视化
 
-**Deliverable:** 13 个代表量的主趋势、outcome secondary analysis 和完整诊断图。
+**Deliverable:** 16 个代表量的主趋势、四层 horizontal anchor 分析、outcome secondary analysis 和完整诊断图。
 
-- [ ] 校验 13 个 representative 与 frozen spec 完全一致。
+- [ ] 校验 16 个 representative、37 个 primary discovery tests 与 frozen spec 完全一致。
 - [ ] 计算 base-standardized checkpoint x stage 汇总与 4,000 次 question bootstrap。
 - [ ] 拟合 training-progress x stage 主模型并做 BH-FDR。
 - [ ] 运行 correct/wrong、within-question AUC 和 length/policy-entropy 增量分析。
@@ -852,7 +995,7 @@ AUDIT.json
 本 discovery 实验只有在以下条件全部满足时才算完成：
 
 - 六个冻结 checkpoint 与 6,144 条固定 cohort rollout 完整；
-- 13 个代表量在四 stages、两 representations 上均有 coverage 报告；
+- 16 个代表量在四 stages 上均有 coverage 报告；H1-H7 在四个 anchor 和两种 representations 上报告，H8 的 final primary 与逐层探索 profile 分开报告；
 - base common/calibrator 只由 base checkpoint、label-blind 数据构造并在后续冻结；
 - 主趋势经过 length 与 policy entropy 控制并完成 BH-FDR；
 - correct/wrong 分析同时报告 question-equal、pair-weighted 和 OOF length increment；
