@@ -692,7 +692,7 @@ Z_{k,\Delta}^{v,c}=Z_{k,\Delta}^{v}-\mathbf1\bar d_k^\top,
 | ID | Axis | Family | Representative | Depth scope | Stage mode |
 |---|---|---|---|---|---|
 | H1 | horizontal | movement | median relative movement | L3/L12/L24/Lfinal | local |
-| H2 | horizontal | path | straightness | L3/L12/L24/Lfinal | local + cumulative |
+| H2 | horizontal | path | straightness | L3/L12/L24/Lfinal | local primary；cumulative sensitivity |
 | H3 | horizontal | turning | median turn angle | L3/L12/L24/Lfinal | local |
 | H4 | horizontal | angular velocity | P90 absolute angular velocity | L3/L12/L24/Lfinal | local |
 | H5 | horizontal | centered state ER dynamics | centered ERV | L3/L12/L24/Lfinal | cumulative |
@@ -1003,3 +1003,17 @@ AUDIT.json
 - 结论明确区分 training diagnostic、outcome diagnostic 与 process-reward candidate；
 - 没有在本轮启动任何 hidden-state reward shaping；
 - 报告包含机器可读 audit、全部 frozen decision 和 single-seed 限制。
+
+---
+
+## 17. 本地实现状态（2026-08-05）
+
+已完成但尚未在 H200 上执行：
+
+- formal run/checkpoint/roll8 seed manifest 的冻结与审计代码；
+- 正式 GRPO、六 checkpoint roll8、2 题 × 2 rollout × 2 checkpoint hidden smoke、正式 hidden extraction 的 tmux 入口；
+- H1-H8、V1-V8、base common/z-score calibrator、在线标量归约与 coverage 输出；
+- base-standardized 趋势、question bootstrap、question-equal/pair-weighted AUC、按题 OOF length+policy-entropy 对照、BH-FDR、主图与 HTML 报告代码；
+- 本地 synthetic/unit tests 与 shell syntax checks。
+
+明确未执行：正式 manifest 冻结、正式 GRPO、12,288 条 rollout、任何真实模型 hidden forward。下一边界是连接 H200 后先审计 GPU/tmux/路径，再依次冻结 manifest、运行正式 GRPO、生成并审计 roll8 cohort，最后运行 hidden smoke；hidden smoke 通过前不得启动正式 hidden extraction。

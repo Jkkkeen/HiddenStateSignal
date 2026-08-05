@@ -141,7 +141,10 @@ def prepare_dataset(
     *,
     eval_size: int = 256,
     seed: int = 20260805,
+    eval_rollouts_per_checkpoint: int = 8,
 ) -> dict[str, Any]:
+    if eval_rollouts_per_checkpoint < 1:
+        raise ValueError("eval_rollouts_per_checkpoint must be positive")
     output_dir.mkdir(parents=True, exist_ok=True)
     train_records, train_rejected = build_verl_records(train_frame, split="train", levels={3, 4, 5})
     test_records, test_rejected = build_verl_records(test_frame, split="test", levels=None)
@@ -178,7 +181,7 @@ def prepare_dataset(
     for record in eval_records:
         question_id = record["extra_info"]["question_id"]
         for checkpoint in CHECKPOINT_NAMES:
-            for rollout_slot in range(4):
+            for rollout_slot in range(eval_rollouts_per_checkpoint):
                 seed_rows.append(
                     {
                         "question_id": question_id,
@@ -192,6 +195,7 @@ def prepare_dataset(
     audit = {
         "data_source": DATA_SOURCE,
         "seed": seed,
+        "eval_rollouts_per_checkpoint": eval_rollouts_per_checkpoint,
         "train_levels": [3, 4, 5],
         "n_train": len(train_records),
         "n_eval": len(eval_records),
@@ -225,6 +229,7 @@ def main() -> None:
     parser.add_argument("--local-dataset-path")
     parser.add_argument("--eval-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=20260805)
+    parser.add_argument("--eval-rollouts-per-checkpoint", type=int, default=8)
     args = parser.parse_args()
     dataset = _load_dataset(args.dataset_name, args.local_dataset_path)
     audit = prepare_dataset(
@@ -233,6 +238,7 @@ def main() -> None:
         args.output_dir,
         eval_size=args.eval_size,
         seed=args.seed,
+        eval_rollouts_per_checkpoint=args.eval_rollouts_per_checkpoint,
     )
     print(audit)
 

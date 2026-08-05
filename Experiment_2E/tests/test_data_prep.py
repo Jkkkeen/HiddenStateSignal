@@ -55,4 +55,6 @@ def test_prepare_dataset_writes_verl_parquet_and_seed_manifest(tmp_path):
     assert audit["n_eval"] == 6
     prepared = pd.read_parquet(tmp_path / "eval_256.parquet")
     assert len(prepared) == 6
-    assert len(pd.read_csv(tmp_path / "eval_seed_manifest.csv")) == 6 * 6 * 4
+    seed_manifest = pd.read_csv(tmp_path / "eval_seed_manifest.csv")
+    assert len(seed_manifest) == 6 * 6 * 8
+    assert set(seed_manifest["rollout_slot"]) == set(range(8))
