@@ -7,6 +7,16 @@ ENV_ROOT=${ENV_ROOT:-/data2/hjk/envs/verl_qwen3vl_py311}
 MODEL_PATH=${MODEL_PATH:-/data2/hjk/models/Qwen2.5-7B-Instruct}
 MANIFEST=${MANIFEST:?Set MANIFEST to frozen formal_run_manifest.json}
 RESUME_MODE=${RESUME_MODE:-auto}
+NOFILE_LIMIT=${NOFILE_LIMIT:-65535}
+
+if [[ "$(ulimit -n)" != "unlimited" ]]; then
+  ulimit -n "${NOFILE_LIMIT}"
+fi
+CURRENT_NOFILE=$(ulimit -n)
+if [[ "${CURRENT_NOFILE}" != "unlimited" ]] && (( CURRENT_NOFILE < NOFILE_LIMIT )); then
+  echo "Unable to raise file descriptor limit to ${NOFILE_LIMIT}; current=${CURRENT_NOFILE}" >&2
+  exit 1
+fi
 
 export PATH="${ENV_ROOT}/bin:${PATH}"
 export PYTHONPATH="${PROJECT_ROOT}:${VERL_ROOT}:${PYTHONPATH:-}"
