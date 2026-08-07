@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "run_grpo_formal.sh"
+LAUNCHER = ROOT / "scripts" / "launch_grpo_formal_tmux.sh"
 
 
 def script_text() -> str:
@@ -30,3 +31,11 @@ def test_formal_runner_keeps_batch_one_rollout_eight_and_uses_native_logger() ->
     assert 'trainer.logger="${TRAINER_LOGGER}"' in text
     assert "TRAINER_LOGGER='[\"console\",\"swanlab\"]'" in text
     assert "TRAINER_LOGGER='[\"console\"]'" in text
+
+
+def test_tmux_launcher_forwards_the_opt_in_swanlab_flag_without_a_secret() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'ENABLE_SWANLAB=${ENABLE_SWANLAB:-0}' in text
+    assert "ENABLE_SWANLAB='${ENABLE_SWANLAB}'" in text
+    assert "SWANLAB_API_KEY" not in text

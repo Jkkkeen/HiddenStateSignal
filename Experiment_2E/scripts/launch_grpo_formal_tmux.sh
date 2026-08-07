@@ -5,6 +5,7 @@ PROJECT_ROOT=${PROJECT_ROOT:-/data2/hjk/projects/AI-HiddenState/Experiment_2E}
 SESSION=${SESSION:-exp2e_grpo_formal}
 MANIFEST=${MANIFEST:?Set MANIFEST to frozen formal_run_manifest.json}
 LAUNCH_LOG=${LAUNCH_LOG:-/data2/hjk/logs/experiment_2e/formal_launcher.log}
+ENABLE_SWANLAB=${ENABLE_SWANLAB:-0}
 
 if tmux has-session -t "${SESSION}" 2>/dev/null; then
   echo "tmux session already exists: ${SESSION}" >&2
@@ -21,5 +22,5 @@ fi
 test -f "${MANIFEST}"
 mkdir -p "$(dirname "${LAUNCH_LOG}")"
 tmux new-session -d -s "${SESSION}" \
-  "cd '${PROJECT_ROOT}' && MANIFEST='${MANIFEST}' bash scripts/run_grpo_formal.sh 2>&1 | tee -a '${LAUNCH_LOG}'"
+  "cd '${PROJECT_ROOT}' && ENABLE_SWANLAB='${ENABLE_SWANLAB}' MANIFEST='${MANIFEST}' bash scripts/run_grpo_formal.sh 2>&1 | tee -a '${LAUNCH_LOG}'"
 echo "Started ${SESSION}; inspect with: tmux attach -t ${SESSION}"
