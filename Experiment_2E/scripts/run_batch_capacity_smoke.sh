@@ -13,6 +13,7 @@ SOURCE_STEP=${SOURCE_STEP:-3348}
 WARMUP_STEPS=${WARMUP_STEPS:-2}
 MEASURED_STEPS=${MEASURED_STEPS:-5}
 TOTAL_TRAINING_STEPS=$((SOURCE_STEP + WARMUP_STEPS + MEASURED_STEPS))
+SMOKE_EPOCHS=${SMOKE_EPOCHS:-2}
 SEED=${SEED:-20260805}
 BATCHES=(2 4 8)
 RUN_ROOT=${RUN_ROOT:-/data2/hjk/results/experiment_2e/batch_capacity_step${SOURCE_STEP}_$(date -u +%Y%m%dT%H%M%SZ)}
@@ -129,7 +130,7 @@ run_candidate() {
     ROLLOUT_TP=1 \
     ROLLOUT_N=8 \
     ROLLOUT_GPU_MEM_UTIL=0.30 \
-    TOTAL_EPOCHS=1 \
+    TOTAL_EPOCHS="${SMOKE_EPOCHS}" \
     SAVE_FREQ=-1 \
     TEST_FREQ=-1 \
     PROJECT_NAME=experiment_2e_batch_capacity \
@@ -145,6 +146,7 @@ run_candidate() {
       data.truncation=error \
       trainer.logger='["console"]' \
       trainer.total_training_steps="${TOTAL_TRAINING_STEPS}" \
+      trainer.total_epochs="${SMOKE_EPOCHS}" \
       trainer.val_before_train=False \
       trainer.resume_mode=auto \
       trainer.default_local_dir="${CANDIDATE_CKPT}" \

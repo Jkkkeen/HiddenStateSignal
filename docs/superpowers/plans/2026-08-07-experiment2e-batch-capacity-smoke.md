@@ -14,6 +14,9 @@
 - Resume source is `global_step_3348`; formal `latest_checkpointed_iteration.txt` must remain `3348`.
 - Candidates are `2`, `4`, and `8`; `rollout.n=8` and all other formal hyperparameters remain unchanged.
 - Each candidate completes two warm-up plus five measured steps.
+- Each candidate uses `total_epochs=2` so a batch-size change does not make the
+  resumed `global_step=3348` lie beyond the first epoch; no formal training
+  configuration is changed.
 - SwanLab is out of scope and requires a separate user approval.
 
 ---
