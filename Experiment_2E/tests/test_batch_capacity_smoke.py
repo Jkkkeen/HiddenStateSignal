@@ -15,7 +15,7 @@ def test_runner_uses_frozen_candidates_and_seven_steps() -> None:
     assert 'MEASURED_STEPS=${MEASURED_STEPS:-5}' in text
     assert 'WARMUP_STEPS=${WARMUP_STEPS:-2}' in text
     assert 'TOTAL_TRAINING_STEPS=$((SOURCE_STEP + WARMUP_STEPS + MEASURED_STEPS))' in text
-    assert 'SMOKE_EPOCHS=${SMOKE_EPOCHS:-2}' in text
+    assert 'SMOKE_EPOCHS=${SMOKE_EPOCHS:-6}' in text
     assert 'trainer.total_epochs="${SMOKE_EPOCHS}"' in text
 
 
