@@ -11,7 +11,8 @@ def script_text() -> str:
 
 def test_runner_uses_frozen_candidates_and_seven_steps() -> None:
     text = script_text()
-    assert 'BATCHES=(2 4 8)' in text
+    assert 'BATCHES_CSV=${BATCHES_CSV:-2,4,8}' in text
+    assert "IFS=',' read -r -a BATCHES" in text
     assert 'MEASURED_STEPS=${MEASURED_STEPS:-5}' in text
     assert 'WARMUP_STEPS=${WARMUP_STEPS:-2}' in text
     assert 'TOTAL_TRAINING_STEPS=$((SOURCE_STEP + WARMUP_STEPS + MEASURED_STEPS))' in text

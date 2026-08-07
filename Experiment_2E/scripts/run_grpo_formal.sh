@@ -8,6 +8,8 @@ MODEL_PATH=${MODEL_PATH:-/data2/hjk/models/Qwen2.5-7B-Instruct}
 MANIFEST=${MANIFEST:?Set MANIFEST to frozen formal_run_manifest.json}
 RESUME_MODE=${RESUME_MODE:-auto}
 NOFILE_LIMIT=${NOFILE_LIMIT:-65535}
+ENABLE_SWANLAB=${ENABLE_SWANLAB:-0}
+SWANLAB_ENV_FILE=${SWANLAB_ENV_FILE:-/data2/hjk/secrets/experiment_2e_swanlab.env}
 
 if [[ "$(ulimit -n)" != "unlimited" ]]; then
   ulimit -n "${NOFILE_LIMIT}"
@@ -70,6 +72,30 @@ CKPT_DIR=${CKPT_DIR:-/data2/hjk/checkpoints/experiment_2e/${RUN_NAME}}
 LOG=${LOG:-/data2/hjk/logs/experiment_2e/${RUN_NAME}.log}
 AUDIT=${AUDIT:-/data2/hjk/results/experiment_2e/${RUN_NAME}/training/formal_training_audit.json}
 PATCH_AUDIT=${PATCH_AUDIT:-/data2/hjk/results/experiment_2e/${RUN_NAME}/training/verl_temp_loop_patch_audit.json}
+TRAINER_LOGGER='["console"]'
+
+if [[ "${ENABLE_SWANLAB}" == "1" ]]; then
+  if [[ ! -r "${SWANLAB_ENV_FILE}" ]]; then
+    echo "SwanLab credential file is unreadable: ${SWANLAB_ENV_FILE}" >&2
+    exit 1
+  fi
+  if [[ "$(stat -c '%a' "${SWANLAB_ENV_FILE}")" != "600" ]]; then
+    echo "SwanLab credential file must have mode 600: ${SWANLAB_ENV_FILE}" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "${SWANLAB_ENV_FILE}"
+  if [[ -z "${SWANLAB_API_KEY:-}" ]]; then
+    echo "SWANLAB_API_KEY must be defined in ${SWANLAB_ENV_FILE}" >&2
+    exit 1
+  fi
+  export SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR:-/data2/hjk/logs/experiment_2e/swanlab/${RUN_NAME}}
+  export SWANLAB_MODE=${SWANLAB_MODE:-online}
+  export SWANLAB_RUN_ID=${SWANLAB_RUN_ID:-${RUN_NAME}}
+  export SWANLAB_RESUME=${SWANLAB_RESUME:-allow}
+  mkdir -p "${SWANLAB_LOG_DIR}"
+  TRAINER_LOGGER='["console","swanlab"]'
+fi
 
 test -f "${MODEL_PATH}/config.json"
 test -f "${TRAIN_FILE}"
@@ -82,7 +108,7 @@ mkdir -p "${CKPT_DIR}" "$(dirname "${LOG}")" "$(dirname "${AUDIT}")" "${RAY_TMPD
   --audit "${PATCH_AUDIT}"
 
 exec > >(tee -a "${LOG}") 2>&1
-echo "RUN_NAME=${RUN_NAME} TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS} SAVE_FREQ=${SAVE_FREQ} RESUME_MODE=${RESUME_MODE}"
+echo "RUN_NAME=${RUN_NAME} TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS} SAVE_FREQ=${SAVE_FREQ} RESUME_MODE=${RESUME_MODE} ENABLE_SWANLAB=${ENABLE_SWANLAB}"
 nvidia-smi
 
 cd "${VERL_ROOT}"
@@ -112,7 +138,7 @@ bash examples/grpo_trainer/run_qwen3_8b_fsdp.sh \
   data.seed="${SEED}" \
   data.filter_overlong_prompts=True \
   data.truncation=error \
-  trainer.logger='["console"]' \
+  trainer.logger="${TRAINER_LOGGER}" \
   trainer.total_training_steps="${TOTAL_TRAINING_STEPS}" \
   trainer.val_before_train=False \
   trainer.resume_mode="${RESUME_MODE}" \
