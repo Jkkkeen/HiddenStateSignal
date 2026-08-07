@@ -16,6 +16,7 @@ TOTAL_TRAINING_STEPS=$((SOURCE_STEP + WARMUP_STEPS + MEASURED_STEPS))
 SEED=${SEED:-20260805}
 BATCHES=(2 4 8)
 RUN_ROOT=${RUN_ROOT:-/data2/hjk/results/experiment_2e/batch_capacity_step${SOURCE_STEP}_$(date -u +%Y%m%dT%H%M%SZ)}
+RAY_BASE=${RAY_BASE:-/data2/hjk/cache/ray/e2b}
 NOFILE_LIMIT=${NOFILE_LIMIT:-65535}
 
 if [[ "$(ulimit -n)" != "unlimited" ]]; then
@@ -92,11 +93,16 @@ run_candidate() {
   local CANDIDATE_CKPT="${CANDIDATE_ROOT}/checkpoints"
   local LOG="${CANDIDATE_ROOT}/train.log"
   local TELEMETRY="${CANDIDATE_ROOT}/gpu_telemetry.csv"
-  local RAY_TMPDIR="${CANDIDATE_ROOT}/ray"
+  local RAY_TMPDIR="${RAY_BASE}/s${SOURCE_STEP}_b${BATCH_SIZE}_$$"
   local TMPDIR="${CANDIDATE_ROOT}/tmp"
 
   assert_gpu_idle
+  if [[ -e "${RAY_TMPDIR}" ]]; then
+    echo "RAY_TMPDIR already exists: ${RAY_TMPDIR}" >&2
+    return 2
+  fi
   mkdir -p "${CANDIDATE_CKPT}" "${RAY_TMPDIR}" "${TMPDIR}"
+  printf '%s\n' "${RAY_TMPDIR}" > "${CANDIDATE_ROOT}/ray_tmpdir.txt"
   ln -s "${SOURCE_CKPT}" "${CANDIDATE_CKPT}/global_step_${SOURCE_STEP}"
   printf '%s\n' "${SOURCE_STEP}" > "${CANDIDATE_CKPT}/latest_checkpointed_iteration.txt"
 

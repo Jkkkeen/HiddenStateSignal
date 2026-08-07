@@ -4,7 +4,7 @@
 
 **Goal:** Run isolated train-batch 2/4/8 capacity probes from the audited Experiment 2E step-3348 checkpoint and report stable/useful limits without changing the formal run.
 
-**Architecture:** A focused Bash launcher creates a unique scratch root, links the formal checkpoint read-only, starts one-second GPU telemetry, and runs each candidate sequentially with identical frozen GRPO settings. A Python summarizer parses completed-step metrics and telemetry into a machine-readable audit and applies the frozen stability/usefulness rules.
+**Architecture:** A focused Bash launcher creates a unique scratch root, links the formal checkpoint read-only, starts one-second GPU telemetry, and runs each candidate sequentially with identical frozen GRPO settings. Ray sockets use a separate short, candidate-unique path under `/data2/hjk/cache/ray/e2b` to remain below the Linux AF_UNIX 107-byte limit. A Python summarizer parses completed-step metrics and telemetry into a machine-readable audit and applies the frozen stability/usefulness rules.
 
 **Tech Stack:** Bash, tmux, veRL/Hydra, Ray, vLLM, `nvidia-smi`, Python 3.11, pytest.
 

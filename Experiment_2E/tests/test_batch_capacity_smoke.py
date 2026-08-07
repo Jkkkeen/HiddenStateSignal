@@ -21,7 +21,8 @@ def test_runner_isolates_checkpoint_and_ray_paths() -> None:
     text = script_text()
     assert 'ln -s "${SOURCE_CKPT}" "${CANDIDATE_CKPT}/global_step_${SOURCE_STEP}"' in text
     assert 'trainer.default_local_dir="${CANDIDATE_CKPT}"' in text
-    assert 'RAY_TMPDIR="${CANDIDATE_ROOT}/ray"' in text
+    assert 'local RAY_TMPDIR="${RAY_BASE}/s${SOURCE_STEP}_b${BATCH_SIZE}_$$"' in text
+    assert '"${CANDIDATE_ROOT}/ray_tmpdir.txt"' in text
     assert 'test "$(tr -d \'[:space:]\' < "${SOURCE_CKPT_ROOT}/latest_checkpointed_iteration.txt")" = "${SOURCE_STEP}"' in text
 
 
