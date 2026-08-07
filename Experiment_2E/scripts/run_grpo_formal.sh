@@ -69,12 +69,17 @@ fi
 CKPT_DIR=${CKPT_DIR:-/data2/hjk/checkpoints/experiment_2e/${RUN_NAME}}
 LOG=${LOG:-/data2/hjk/logs/experiment_2e/${RUN_NAME}.log}
 AUDIT=${AUDIT:-/data2/hjk/results/experiment_2e/${RUN_NAME}/training/formal_training_audit.json}
+PATCH_AUDIT=${PATCH_AUDIT:-/data2/hjk/results/experiment_2e/${RUN_NAME}/training/verl_temp_loop_patch_audit.json}
 
 test -f "${MODEL_PATH}/config.json"
 test -f "${TRAIN_FILE}"
 test -f "${VAL_FILE}"
 test -f "${PROJECT_ROOT}/experiment_2e/math_reward.py"
 mkdir -p "${CKPT_DIR}" "$(dirname "${LOG}")" "$(dirname "${AUDIT}")" "${RAY_TMPDIR}" "${TMPDIR}"
+
+"${ENV_ROOT}/bin/python" "${PROJECT_ROOT}/scripts/patch_verl_temp_loop.py" \
+  --verl-root "${VERL_ROOT}" \
+  --audit "${PATCH_AUDIT}"
 
 exec > >(tee -a "${LOG}") 2>&1
 echo "RUN_NAME=${RUN_NAME} TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS} SAVE_FREQ=${SAVE_FREQ} RESUME_MODE=${RESUME_MODE}"
