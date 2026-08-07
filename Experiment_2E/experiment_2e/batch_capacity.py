@@ -137,15 +137,29 @@ def summarize_candidate(
     }
 
 
+def _discover_candidates(run_root: Path) -> tuple[int, ...]:
+    batches: list[int] = []
+    for path in run_root.glob("batch_*"):
+        if not path.is_dir():
+            continue
+        try:
+            batches.append(int(path.name.removeprefix("batch_")))
+        except ValueError:
+            continue
+    return tuple(sorted(set(batches)))
+
+
 def build_audit(
     run_root: Path,
     *,
-    candidates: tuple[int, ...] = (2, 4, 8),
+    candidates: tuple[int, ...] | None = None,
     source_step: int = 3348,
     warmup_steps: int = 2,
     measured_steps: int = 5,
     minimum_headroom: float = 0.10,
 ) -> dict[str, object]:
+    if candidates is None:
+        candidates = _discover_candidates(run_root)
     summaries = {
         str(batch): summarize_candidate(
             run_root / f"batch_{batch}",

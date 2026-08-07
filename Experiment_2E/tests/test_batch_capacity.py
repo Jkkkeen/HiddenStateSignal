@@ -75,3 +75,12 @@ def test_audit_is_json_serializable(tmp_path: Path) -> None:
     write_candidate(tmp_path, 2)
     audit = build_audit(tmp_path, candidates=(2,))
     assert json.loads(json.dumps(audit))["source_step"] == 3348
+
+
+def test_default_audit_discovers_an_extended_batch_candidate(tmp_path: Path) -> None:
+    write_candidate(tmp_path, 16, throughput=625.0)
+
+    audit = build_audit(tmp_path)
+
+    assert list(audit["candidates"]) == ["16"]
+    assert audit["maximum_stable_batch"] == 16
