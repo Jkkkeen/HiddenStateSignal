@@ -50,6 +50,57 @@ baseline:
 - overhead between 30% and 50%: run the pre-registered reduced-group smoke
   before resolving the interval.
 
+The completed full-probe smoke measured an overhead ratio of approximately
+`1.49`, so the reduced-group branch is required.
+
+## Deterministic 16-Group Probe
+
+Add an explicit `HIDDEN_PROBE_GROUP_LIMIT` setting. Its default is 32, while
+the reduced smoke and formal run freeze it to 16.
+
+Selection happens after DAPO group filtering has accepted the 32 mixed prompt
+groups and before the old-policy log-probability forward:
+
+1. read each accepted trajectory's frozen `extra_info.prompt_hash`;
+2. sort the 32 distinct hashes lexicographically;
+3. select all eight trajectories belonging to the first 16 hashes;
+4. attach a per-trajectory boolean mask to the old-log-probability batch;
+5. return NaN hidden vectors for unselected trajectories so the existing
+   question-equal aggregator excludes them.
+
+All 32 accepted groups still participate in old/reference log-probability,
+advantage, loss, and optimizer updates. The setting changes only which groups
+enter hidden reduction and aggregation.
+
+The mask must survive dynamic-batch reordering and restoration. A worker
+micro-batch with no selected trajectory may skip `output_hidden_states`;
+otherwise the engine computes dashboard vectors only for selected
+trajectories. The online summary must record 16 probed questions and the actual
+number of valid probed rollouts.
+
+Run a new five-step reduced probe in its own tmux session with:
+
+- `USE_REMOVE_PADDING=True`;
+- `HIDDEN_PROBE_RATE=1`;
+- `HIDDEN_PROBE_GROUP_LIMIT=16`;
+- `HIDDEN_PROBE_INTERVAL=1`.
+
+The reduced probe must exit cleanly, write five online history rows, retain 141
+latest PNG files, and report 16 probed questions per step. If it fails or its
+median overhead still exceeds 50%, formal training remains blocked.
+
+## Timing Audit Compatibility
+
+The smoke auditor must parse both supported veRL timing formats:
+
+- dictionary telemetry such as `'timing_s/step': 10.0`;
+- console telemetry such as `timing_s/step:10.0`.
+
+For the middle branch, approval records both the full-probe and reduced-probe
+ratios, freezes `hidden_probe_group_limit=16`, and freezes
+`hidden_probe_interval=1`. Formal mode reads both values from the passed
+approval JSON instead of accepting launch-time overrides.
+
 ## Resume And Formal Gate
 
 After the five-step probe succeeds, resume its checkpoint to step 20 with the
@@ -82,8 +133,13 @@ from approval inputs.
 
 - runner tests assert the default, Hydra argument, and resolved config all use
   the same remove-padding value;
+- runner tests assert formal mode reads the approved group limit and interval;
 - attention utility fallback tests remain green;
-- Q3 selection and smoke-audit tests remain green;
+- Q3 selection and smoke-audit tests cover dictionary and console timing plus
+  the 16-group middle branch;
+- hidden-probe tests prove hash selection is deterministic, keeps whole groups,
+  and masks unselected trajectories without changing batch size;
 - remote resolved configs and logs prove both timing jobs used remove-padding
   `True`;
-- the final approval JSON is generated only from the new comparable pair.
+- the final approval JSON is generated from the comparable baseline, full
+  probe, reduced probe, and completed 20-step resume artifacts.
