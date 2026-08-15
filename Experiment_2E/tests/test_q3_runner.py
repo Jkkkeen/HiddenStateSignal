@@ -23,3 +23,18 @@ def test_q3_runner_rejects_unknown_remove_padding_values() -> None:
     assert 'case "${USE_REMOVE_PADDING}" in' in text
     assert "True|False)" in text
     assert "USE_REMOVE_PADDING must be True or False" in text
+
+
+def test_q3_runner_freezes_hidden_probe_group_limit() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "HIDDEN_PROBE_GROUP_LIMIT=${HIDDEN_PROBE_GROUP_LIMIT:-32}" in text
+    assert "HIDDEN_PROBE_GROUP_LIMIT must be an integer in 1..32" in text
+    assert '"hidden_probe_group_limit":${HIDDEN_PROBE_GROUP_LIMIT}' in text
+
+
+def test_q3_formal_runner_reads_probe_settings_from_approval() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "p.get('hidden_probe_group_limit') in (16, 32)" in text
+    assert "p['hidden_probe_group_limit']" in text
+    assert "p['hidden_probe_interval']" in text
+    assert "export HIDDEN_PROBE_GROUP_LIMIT HIDDEN_PROBE_INTERVAL" in text

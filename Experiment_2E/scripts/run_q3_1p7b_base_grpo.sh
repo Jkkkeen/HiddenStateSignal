@@ -34,6 +34,12 @@ export TMPDIR=${TMPDIR:-/data2/hjk/t/q3b17}
 export RAY_memory_usage_threshold=0.99
 export HIDDEN_PROBE_RATE=${HIDDEN_PROBE_RATE:-1.0}
 export HIDDEN_PROBE_INTERVAL=${HIDDEN_PROBE_INTERVAL:-1}
+export HIDDEN_PROBE_GROUP_LIMIT=${HIDDEN_PROBE_GROUP_LIMIT:-32}
+if ! [[ "${HIDDEN_PROBE_GROUP_LIMIT}" =~ ^[0-9]+$ ]] || \
+   (( HIDDEN_PROBE_GROUP_LIMIT < 1 || HIDDEN_PROBE_GROUP_LIMIT > 32 )); then
+  echo "HIDDEN_PROBE_GROUP_LIMIT must be an integer in 1..32" >&2
+  exit 2
+fi
 export HIDDEN_PROBE_STRIDE=128
 export HIDDEN_PROBE_V3_MODE=base
 export HIDDEN_PROBE_BASE_COMMON="${BASE_COMMON}"
@@ -62,13 +68,18 @@ assert p.get('status')=='passed', p
 assert p.get('checkpoint_restore_passed') is True, p
 assert p.get('dashboard_image_count') == 141, p
 assert p.get('hidden_probe_interval') in (1, 5), p
+assert p.get('hidden_probe_group_limit') in (16, 32), p
 PY
-  HIDDEN_PROBE_INTERVAL=$("${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
+  mapfile -t APPROVED_PROBE < <("${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
 import json, sys
-print(json.load(open(sys.argv[1],encoding='utf-8'))['hidden_probe_interval'])
+p=json.load(open(sys.argv[1],encoding='utf-8'))
+print(p['hidden_probe_group_limit'])
+print(p['hidden_probe_interval'])
 PY
 )
-  export HIDDEN_PROBE_INTERVAL
+  HIDDEN_PROBE_GROUP_LIMIT=${APPROVED_PROBE[0]}
+  HIDDEN_PROBE_INTERVAL=${APPROVED_PROBE[1]}
+  export HIDDEN_PROBE_GROUP_LIMIT HIDDEN_PROBE_INTERVAL
 else
   TRAIN_FILE=${SMOKE_FILE}
   VAL_FILE=${SMOKE_VAL_FILE}
@@ -129,7 +140,7 @@ finish_sidecar() {
 trap finish_sidecar EXIT
 
 cat > "${RESULT_ROOT}/resolved_shell_config.json" <<JSON
-{"mode":"${MODE}","dataset":"${DATASET}","steps":${TOTAL_STEPS},"train_batch_size":32,"rollout_n":8,"ppo_mini_batch_size_prompts":8,"max_response_length":${MAX_RESPONSE_LENGTH},"attention_implementation":"sdpa","remove_padding":${USE_REMOVE_PADDING,,},"dataloader_num_workers":0,"hidden_schema":"hidden_dashboard_v1_141x4","hidden_stride":128,"hidden_probe_rate":${HIDDEN_PROBE_RATE},"hidden_probe_interval":${HIDDEN_PROBE_INTERVAL},"model":"${MODEL_PATH}"}
+{"mode":"${MODE}","dataset":"${DATASET}","steps":${TOTAL_STEPS},"train_batch_size":32,"rollout_n":8,"ppo_mini_batch_size_prompts":8,"max_response_length":${MAX_RESPONSE_LENGTH},"attention_implementation":"sdpa","remove_padding":${USE_REMOVE_PADDING,,},"dataloader_num_workers":0,"hidden_schema":"hidden_dashboard_v1_141x4","hidden_stride":128,"hidden_probe_rate":${HIDDEN_PROBE_RATE},"hidden_probe_group_limit":${HIDDEN_PROBE_GROUP_LIMIT},"hidden_probe_interval":${HIDDEN_PROBE_INTERVAL},"model":"${MODEL_PATH}"}
 JSON
 
 cd "${VERL_ROOT}"
