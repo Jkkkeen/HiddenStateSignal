@@ -24,10 +24,36 @@ class AdapterInspection:
     metadata_coverage: dict[str, float] = field(default_factory=dict)
     finite_rates: list[float] = field(default_factory=list)
     record_count: int = 0
+    sampled_records: int = 0
+    duplicate_record_ids: list[str] = field(default_factory=list)
+    response_boundary_status: dict[str, int] = field(default_factory=dict)
+    mtp_candidate_positions: list[int] = field(default_factory=list)
+    input_manifest_sha256: str = ""
 
     @property
     def passed(self) -> bool:
         return not self.errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "adapter": self.adapter,
+            "input_mode": self.input_mode,
+            "files": self.files,
+            "sample_shapes": [list(shape) for shape in self.sample_shapes],
+            "dtypes": self.dtypes,
+            "keys": self.keys,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "metadata_coverage": self.metadata_coverage,
+            "finite_rates": self.finite_rates,
+            "record_count": self.record_count,
+            "sampled_records": self.sampled_records,
+            "duplicate_record_ids": self.duplicate_record_ids,
+            "response_boundary_status": self.response_boundary_status,
+            "mtp_candidate_positions": self.mtp_candidate_positions,
+            "input_manifest_sha256": self.input_manifest_sha256,
+            "passed": self.passed,
+        }
 
 
 class VerticalAdapter(Protocol):
@@ -254,4 +280,3 @@ def inspect_records(
     report.keys = sorted(set(report.keys))
     report.dtypes = sorted(set(report.dtypes))
     return report
-
