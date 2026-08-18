@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
+from datetime import datetime, timezone
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,21 @@ from .schema import VerticalRecord
 
 
 DEFAULT_SMOKE_RECORDS = 16
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _code_revision() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else "unavailable"
 
 
 def _approval(path: Path | None) -> dict[str, Any]:
@@ -194,6 +211,8 @@ def _manifest(
     value: dict[str, Any] = {
         "run_id": config.run_id,
         "mode": mode,
+        "created_at_utc": _utc_now(),
+        "code_revision": _code_revision(),
         "config_path": str(config_path),
         "config_sha256": sha256_file(config_path),
         "record_limit_per_dataset": record_limit,
@@ -229,6 +248,7 @@ def run_pipeline(
     if mode == "formal":
         _approval(smoke_approval)
     config = VerticalConfig.from_yaml(config_path)
+    started_at = _utc_now()
     record_limit = DEFAULT_SMOKE_RECORDS if mode == "smoke" else None
     output_root.mkdir(parents=True, exist_ok=True)
     write_json_atomic(
@@ -242,7 +262,13 @@ def run_pipeline(
         output_root / "manifest.json",
     )
     write_json_atomic(
-        {"run_id": config.run_id, "mode": mode, "status": "running", "passed": False},
+        {
+            "run_id": config.run_id,
+            "mode": mode,
+            "status": "running",
+            "passed": False,
+            "started_at_utc": started_at,
+        },
         output_root / "run_status.json",
     )
 
@@ -298,6 +324,8 @@ def run_pipeline(
             "status": "completed",
             "passed": bool(final["passed"]),
             "output_root": str(output_root),
+            "started_at_utc": started_at,
+            "completed_at_utc": _utc_now(),
         }
         write_json_atomic(result, output_root / "run_status.json")
         if mode == "smoke":
@@ -320,6 +348,8 @@ def run_pipeline(
                 "passed": False,
                 "error_type": type(exc).__name__,
                 "error": str(exc),
+                "started_at_utc": started_at,
+                "failed_at_utc": _utc_now(),
             },
             output_root / "run_status.json",
         )

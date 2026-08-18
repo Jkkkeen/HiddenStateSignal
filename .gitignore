@@ -6,6 +6,9 @@
 *.safetensors
 *.pt
 *.pth
+*.ckpt
+pytorch_model*.bin
+model*.bin
 
 # Vertical toolkit local artifacts
 runs/
@@ -13,6 +16,7 @@ runs/
 *.vertical-local.yaml
 *.log
 *.pid
+vertical_release_gate.json
 examples/synthetic_hidden/generated/
 
 # Python cache

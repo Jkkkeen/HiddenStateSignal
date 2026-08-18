@@ -2,7 +2,9 @@
 
 这份教程用于在已经保存好 hidden states 的服务器上，离线计算 Qwen3-8B-Base、MiMo-7B-Base/SFT 的逐层纵向指标。正常流程只使用 CPU，不加载模型权重、不重新生成回答，也不执行模型 forward。
 
-当前稳定流程计算 V1、V3、V4、V6、V7，并输出 correct-wrong、within-question AUROC、depth summaries 和标准图。扩展指标 V2、rolling/cumulative V5/V8/V9 以及 bootstrap、cluster permutation、nuisance controls 使用同一数据契约。
+当前 v0.3 流程已经端到端计算 V1-V9 的逐层或 rolling/cumulative companion，并输出 correct-wrong、within-question AUROC、depth summaries、question bootstrap、cluster permutation、nuisance controls、Base/SFT 配对结果和标准图。
+
+指标状态必须区分：V1/V3/V4/V6/V7 是 `stable`；V2 及 rolling/cumulative V5/V8/V9 是 `experimental`，直到目标服务器的真实数据 smoke 也通过后再升级。v0.3 推断表同样先按 `experimental` 解读，不能因为代码完成就自动视为科学结论已验证。
 
 ## 1. Environment
 
@@ -18,6 +20,7 @@ source .venv-vertical/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-vertical.txt
 python -m pytest tests -q
+python -m vertical.release --repo-root . --output vertical_release_gate.json
 ```
 
 先不要修改真实数据，也不要把真实数据复制进 Git 仓库。
@@ -170,6 +173,23 @@ Base calibration 必须 label-blind：correctness 不参与拟合。
 
 结构上没有定义的位置写 `NaN`，并写独立 coverage count，绝不写成 0。
 
+### v0.2 experimental metrics
+
+- V2 raw adjacent-state angle：目标层为 `h_l`；
+- V5 rolling/cumulative path length、net displacement、straightness、log-detour；
+- V8 rolling/cumulative layer-state ER 与 layer-update ER；
+- V9 rolling/cumulative vertical effective degree、linear/high-order fraction、fit RMSE 和 condition number。
+
+rolling 主规格严格使用连续 4 个 layer updates。前 3 个目标层保留为 coverage 不足的行，不跨层拼接。cumulative 始终从 embedding state `h_0` 累积到当前 decoder 层。
+
+### v0.3 experimental inference
+
+- bootstrap 以 `question_id` 为重采样单位；
+- correct-wrong 连续层簇使用 question-level effect 的 sign flip 和 max-cluster-mass 校正；
+- nuisance 回归使用按问题聚类的稳健标准误，只纳入存在、有限且有变化的控制变量；
+- Base/SFT 配对要求 keys 在每个 condition 内一对一；
+- 跨模型表只使用 relative depth 与 within-family Base standardization。
+
 ## 9. Smoke
 
 Smoke 对每个 dataset 只取少量 record，但必须包含 Base、目标 condition、两种 representation 和尽可能多的 mixed-outcome questions。
@@ -187,7 +207,8 @@ smoke_approval.json -> status: passed
 audit/input_audit.json -> passed: true
 profiles/*.audit.json -> passed: true
 analysis/analysis_audit.json -> passed: true
-figures/*.png -> 非空
+analysis/inference/inference_audit.json -> passed: true
+analysis/figures/*.png -> 非空
 ```
 
 ## 10. Formal tmux
@@ -215,9 +236,9 @@ tmux attach -t vertical_formal_<run_id>
 
 ## 11. Restart And Resume
 
-同一配置和 output root 可以重新运行。只有同时存在通过的 audit、匹配的输入 hash 和完整 Parquet 时，已有 partition 才会复用。
+同一配置和 output root 可以安全重新运行。写入采用临时文件和原子替换；失败时 `run_status.json` 会记录错误，残缺临时文件不会被当成完成结果。当前版本会重新计算并替换目标产物，不承诺自动跳过已完成 partition。
 
-不要删除 `.tmp` 文件来伪造完成。失败 partition 不会被当成有效输出。
+不要修改 audit 或删除 `.tmp` 文件来伪造完成。人工复用结果前必须同时验证 Parquet hash、对应 audit 和输入/config identity。
 
 ## 12. Outputs
 
@@ -227,10 +248,27 @@ runs/<run_id>/
   run_status.json
   smoke_approval.json
   audit/
+    input_audit.json
+    calibration_audit.json
+    final_audit.json
   calibrators/
   profiles/
+    profiles.parquet
+    profiles.audit.json
   analysis/
-  figures/
+    policy_profiles.parquet
+    outcome_profiles.parquet
+    layer_auc.parquet
+    depth_summaries.parquet
+    analysis_audit.json
+    figures/
+    inference/
+      question_bootstrap.parquet
+      cluster_permutation.parquet
+      nuisance_effects.parquet
+      paired_condition_deltas.parquet
+      base_standardized_profiles.parquet
+      inference_audit.json
   logs/
 ```
 
@@ -240,8 +278,11 @@ runs/<run_id>/
 - `final_audit.json`；
 - 脱敏后的 manifest/config；
 - policy/outcome/AUROC/depth summary；
+- inference audit 和经过脱敏、聚合后的必要推断摘要；
 - 关键 figures；
 - 失败时的日志末尾。
+
+不要直接返回整个 formal output tree。先检查文件中是否含绝对路径、prompt/response、record-level 敏感信息，再只回传完成审计与约定的小型汇总。
 
 ## 13. Interpretation
 
@@ -250,6 +291,10 @@ Qwen3-8B 只有 Base 时，可以报告层 profile 和 outcome separation，不�
 MiMo Base/SFT 如果使用各自生成的不同 response，差异包含权重变化与文本变化。只有相同 prompt/response 在两种 condition 下的 hidden states 才支持 representation-only 解释。
 
 跨模型只比较 relative depth、family 内 Base-standardized change、normalized entropy 和效应方向。不要直接相减 Qwen3 与 MiMo 的 hidden vectors 或 raw norms。
+
+只有多个相互独立的 checkpoints/model states 并配有 held-out 指标时，才可以分析 depth summary 与能力提升的 coupling。只有一个 Qwen3 Base 和一组 MiMo Base/SFT 时，这类关系只能描述，不能做训练轨迹或能力因果解释。
+
+MiMo Base/SFT 的 `paired_condition_deltas.parquet` 只有在 question/rollout/representation/stage/layer keys 一对一时可用。`pairing_status: partial/unavailable` 必须保留在报告中。
 
 ## 14. Troubleshooting
 

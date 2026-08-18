@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,12 +50,13 @@ def write_config(tmp_path: Path) -> Path:
     return config
 
 
-def run_cli(*args: str):
+def run_cli(*args: str, env=None):
     return subprocess.run(
         [sys.executable, "-m", "vertical.cli", *args],
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
 
 
@@ -85,6 +87,26 @@ def test_formal_cli_requires_passing_smoke_approval(tmp_path):
 
     assert result.returncode != 0
     assert "smoke approval" in result.stderr.lower()
+
+
+def test_formal_cli_rejects_running_outside_tmux(tmp_path):
+    config = write_config(tmp_path)
+    approval = tmp_path / "smoke_approval.json"
+    approval.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+
+    result = run_cli(
+        "formal",
+        "--config",
+        str(config),
+        "--output-root",
+        str(tmp_path / "formal"),
+        "--smoke-approval",
+        str(approval),
+        env={**os.environ, "TMUX": ""},
+    )
+
+    assert result.returncode != 0
+    assert "inside tmux" in result.stderr.lower()
 
 
 def test_smoke_approval_validator_rejects_failed_file(tmp_path):

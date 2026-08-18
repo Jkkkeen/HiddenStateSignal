@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -94,6 +95,10 @@ def _inspect_command(args: argparse.Namespace) -> int:
 def _pipeline_command(args: argparse.Namespace, *, mode: str) -> int:
     if mode == "formal":
         validate_smoke_approval(args.smoke_approval)
+        if not os.environ.get("TMUX"):
+            raise ValueError(
+                "formal analysis must run inside tmux; use launch_vertical_formal_tmux.sh"
+            )
     from .pipeline import run_pipeline
 
     result = run_pipeline(
