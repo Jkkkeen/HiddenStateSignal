@@ -120,6 +120,9 @@ def _profile_structural_checks(frame: pd.DataFrame) -> dict[str, bool]:
         "v1_relative_layer0_nan": frame.loc[
             frame["layer_index"] == 0, "v1_relative_update_norm"
         ].isna().all(),
+        "v2_layer0_nan": frame.loc[
+            frame["layer_index"] == 0, "v2_raw_state_angle"
+        ].isna().all(),
         "v3_layer0_nan": frame.loc[
             frame["layer_index"] == 0, "v3_demean_state_angle"
         ].isna().all(),
@@ -128,6 +131,9 @@ def _profile_structural_checks(frame: pd.DataFrame) -> dict[str, bool]:
         ].isna().all(),
         "v7_layer0_nan": frame.loc[
             frame["layer_index"] == 0, "v7_layer_difference_entropy"
+        ].isna().all(),
+        "v5_rolling_first3_nan": frame.loc[
+            frame["layer_index"] < 4, "v5_rolling_path_length"
         ].isna().all(),
     }
     return {name: bool(value) for name, value in checks.items()}

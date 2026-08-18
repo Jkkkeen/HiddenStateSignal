@@ -15,6 +15,7 @@ import pandas as pd
 
 from .audit import atomic_parquet, sha256_file, write_json_atomic
 from .depth import summarize_depth_change
+from .profiles import METRIC_REGISTRY
 from .statistics import (
     summarize_layer_auc,
     summarize_outcome_profiles,
@@ -31,6 +32,7 @@ class AnalysisAudit:
     nonblank_figure_count: int
     input_sha256: str
     table_sha256: dict[str, str]
+    metric_status: dict[str, str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +43,7 @@ class AnalysisAudit:
             "nonblank_figure_count": self.nonblank_figure_count,
             "input_sha256": self.input_sha256,
             "table_sha256": self.table_sha256,
+            "metric_status": self.metric_status,
         }
 
 
@@ -298,6 +301,10 @@ def render_v01_report(
         nonblank_figure_count=len(nonblank),
         input_sha256=sha256_file(profiles_path),
         table_sha256={name: sha256_file(path) for name, path in table_paths.items()},
+        metric_status={
+            metric: str(METRIC_REGISTRY.get(metric, {}).get("status", "unregistered"))
+            for metric in metrics
+        },
     )
     write_json_atomic(audit.to_dict(), output_dir / "analysis_audit.json")
     if not audit.passed:

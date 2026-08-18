@@ -18,7 +18,12 @@ from .calibrate import BaseCalibrator, fit_base_calibrator, save_calibrator
 from .config import DatasetConfig, VerticalConfig
 from .inspect import inspect_source
 from .plotting import render_v01_report
-from .profiles import PROFILE_COLUMNS
+from .profiles import (
+    DEFAULT_REPORT_METRICS,
+    METRIC_REGISTRY,
+    PROFILE_COLUMNS,
+    STABLE_PROFILE_COLUMNS,
+)
 from .schema import VerticalRecord
 
 
@@ -193,7 +198,13 @@ def _manifest(
         "config_sha256": sha256_file(config_path),
         "record_limit_per_dataset": record_limit,
         "representations": list(config.representations),
-        "stable_metrics": list(PROFILE_COLUMNS),
+        "stable_metrics": list(STABLE_PROFILE_COLUMNS),
+        "experimental_metrics": [
+            metric
+            for metric in PROFILE_COLUMNS
+            if METRIC_REGISTRY[metric]["status"] == "experimental"
+        ],
+        "default_report_metrics": list(DEFAULT_REPORT_METRICS),
         "datasets": datasets,
     }
     if smoke_approval is not None:
@@ -263,7 +274,7 @@ def run_pipeline(
         render_v01_report(
             profiles_path,
             output_root / "analysis",
-            PROFILE_COLUMNS,
+            DEFAULT_REPORT_METRICS,
         )
         audit_paths = {
             "input": input_audit_path,

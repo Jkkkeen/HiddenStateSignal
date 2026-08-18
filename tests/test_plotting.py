@@ -60,6 +60,7 @@ def test_v01_report_writes_tables_nonblank_figures_and_audit(tmp_path):
     saved = json.loads((output / "analysis_audit.json").read_text(encoding="utf-8"))
     assert saved["passed"] is True
     assert saved["figure_count"] == 4
+    assert saved["metric_status"][METRIC] == "stable"
 
 
 def test_v01_report_rejects_missing_metric(tmp_path):
@@ -71,4 +72,3 @@ def test_v01_report_rejects_missing_metric(tmp_path):
         assert "missing profile metric" in str(exc)
     else:
         raise AssertionError("missing metric should fail")
-
