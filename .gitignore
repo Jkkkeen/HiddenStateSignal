@@ -13,6 +13,7 @@ runs/
 *.vertical-local.yaml
 *.log
 *.pid
+examples/synthetic_hidden/generated/
 
 # Python cache
 __pycache__/
