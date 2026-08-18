@@ -41,7 +41,7 @@ def make_record(
         kind="pooled",
         values=values,
         representation="last_s32",
-        endpoints=np.arange(1, values.shape[0] + 1),
+        endpoints=np.linspace(8 / values.shape[0], 8, values.shape[0], dtype=int),
         progress=np.linspace(1 / values.shape[0], 1.0, values.shape[0]),
     )
     return VerticalRecord(metadata=metadata, payloads={"last_s32": payload})

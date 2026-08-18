@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .pooling import pool_response_states, trajectory_endpoints
+from .pooling import pool_response_states, progress_from_endpoints, trajectory_endpoints
 from .profiles import select_decoder_backbone
 from .schema import VerticalRecord
 
@@ -50,18 +50,38 @@ class BaseCalibrator:
             raise ValueError("calibrator requires positive record and chunk counts")
 
 
-def trajectory_for_record(record: VerticalRecord, representation: str) -> np.ndarray:
+def trajectory_and_progress_for_record(
+    record: VerticalRecord,
+    representation: str,
+) -> tuple[np.ndarray, np.ndarray]:
     record.validate()
     if representation in record.payloads:
         payload = record.payloads[representation]
         if payload.kind != "pooled":
             raise ValueError("named representation payload must be pooled")
         values = np.asarray(payload.values, dtype=np.float32)
-        return select_decoder_backbone(
+        if payload.progress is not None:
+            progress = np.asarray(payload.progress, dtype=float)
+        elif payload.endpoints is not None:
+            progress = progress_from_endpoints(
+                payload.endpoints,
+                record.metadata.response_token_count,
+            )
+        else:
+            raise ValueError("pooled payload requires endpoints or progress")
+        if payload.endpoints is not None and payload.progress is not None:
+            endpoint_progress = progress_from_endpoints(
+                payload.endpoints,
+                record.metadata.response_token_count,
+            )
+            if not np.allclose(progress, endpoint_progress, atol=1e-6):
+                raise ValueError("pooled endpoints and progress disagree")
+        backbone = select_decoder_backbone(
             values,
             num_decoder_layers=record.metadata.num_decoder_layers,
             layer_kind=payload.layer_kind,
         )
+        return backbone, progress
     raw = record.payloads.get("raw")
     if raw is None or raw.kind != "raw":
         raise ValueError(f"record does not provide representation: {representation}")
@@ -72,11 +92,20 @@ def trajectory_for_record(record: VerticalRecord, representation: str) -> np.nda
     pooled = pool_response_states(states, endpoints)
     if representation not in pooled:
         raise ValueError(f"unknown pooled representation: {representation}")
-    return select_decoder_backbone(
+    backbone = select_decoder_backbone(
         pooled[representation],
         num_decoder_layers=record.metadata.num_decoder_layers,
         layer_kind=raw.layer_kind,
     )
+    return backbone, progress_from_endpoints(
+        endpoints,
+        record.metadata.response_token_count,
+    )
+
+
+def trajectory_for_record(record: VerticalRecord, representation: str) -> np.ndarray:
+    trajectory, _ = trajectory_and_progress_for_record(record, representation)
+    return trajectory
 
 
 def fit_base_calibrator(
