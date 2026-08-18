@@ -1,0 +1,36 @@
+run_id: mimo_7b_base_sft_vertical
+output_root: ./runs/mimo_7b_base_sft_vertical
+datasets:
+  - name: mimo_7b_base
+    input_mode: raw
+    adapter: numpy_directory
+    source: ./data/mimo_7b_base
+    model_family: mimo
+    model_name: MiMo-7B-Base
+    condition: base
+    decoder_layers: auto
+    hidden_dimension: auto
+    manifest: manifest.parquet
+    tensor_path_column: hidden_path
+    axis_order: token,layer,dim
+    exclude_layer_kinds:
+      - mtp
+  - name: mimo_7b_sft
+    input_mode: raw
+    adapter: numpy_directory
+    source: ./data/mimo_7b_sft
+    model_family: mimo
+    model_name: MiMo-7B-SFT
+    condition: sft
+    decoder_layers: auto
+    hidden_dimension: auto
+    manifest: manifest.parquet
+    tensor_path_column: hidden_path
+    axis_order: token,layer,dim
+    exclude_layer_kinds:
+      - mtp
+representations:
+  - mean_w128_s32
+  - last_s32
+question_equal: true
+

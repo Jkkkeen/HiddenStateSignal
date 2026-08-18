@@ -1,0 +1,20 @@
+run_id: qwen3_8b_base_vertical
+output_root: ./runs/qwen3_8b_base_vertical
+datasets:
+  - name: qwen3_8b_base
+    input_mode: raw
+    adapter: npz
+    source: ./data/qwen3_8b_base
+    model_family: qwen3
+    model_name: Qwen3-8B-Base
+    condition: base
+    decoder_layers: auto
+    hidden_dimension: auto
+    tensor_key: hidden_states
+    metadata_json_key: metadata_json
+    axis_order: token,layer,dim
+representations:
+  - mean_w128_s32
+  - last_s32
+question_equal: true
+

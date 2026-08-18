@@ -3,6 +3,16 @@
 *.npz
 *.jsonl
 *.npy
+*.safetensors
+*.pt
+*.pth
+
+# Vertical toolkit local artifacts
+runs/
+.vertical-local*.yaml
+*.vertical-local.yaml
+*.log
+*.pid
 
 # Python cache
 __pycache__/
