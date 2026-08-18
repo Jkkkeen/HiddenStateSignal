@@ -17,9 +17,13 @@ from .audit import atomic_parquet, sha256_file, write_json_atomic
 from .depth import summarize_depth_change
 from .profiles import METRIC_REGISTRY
 from .statistics import (
+    cluster_signflip,
+    fit_nuisance_controlled_effects,
+    paired_condition_delta,
     summarize_layer_auc,
     summarize_outcome_profiles,
     summarize_policy_profiles,
+    standardize_within_family_base,
 )
 
 
@@ -309,4 +313,369 @@ def render_v01_report(
     write_json_atomic(audit.to_dict(), output_dir / "analysis_audit.json")
     if not audit.passed:
         raise RuntimeError(f"analysis audit failed: {audit.to_dict()}")
+    return audit
+
+
+INFERENCE_GROUP_KEYS = [
+    "model_family",
+    "model_name",
+    "condition",
+    "checkpoint",
+    "global_step",
+    "training_progress",
+    "stage",
+    "representation",
+]
+INFERENCE_CONTROLS = (
+    "response_token_count",
+    "trajectory_point_count",
+    "policy_entropy",
+)
+
+
+def _question_bootstrap_table(
+    profiles: pd.DataFrame,
+    metrics: Sequence[str],
+    *,
+    n_boot: int,
+    seed: int,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for metric_index, metric in enumerate(metrics):
+        if metric not in profiles:
+            continue
+        data = profiles.copy()
+        data[metric] = pd.to_numeric(data[metric], errors="coerce")
+        data = data.loc[np.isfinite(data[metric])]
+        coverage = f"profile_coverage_count_{metric}"
+        if coverage in data:
+            data = data.loc[data[coverage] > 0]
+        if data.empty:
+            continue
+        question = (
+            data.groupby(INFERENCE_GROUP_KEYS + ["question_id"], dropna=False, as_index=False)
+            .agg(question_mean=(metric, "mean"))
+        )
+        group_index = 0
+        for keys, group in question.groupby(INFERENCE_GROUP_KEYS, dropna=False, sort=True):
+            values = group["question_mean"].to_numpy(float)
+            values = values[np.isfinite(values)]
+            if not values.size:
+                continue
+            rng = np.random.default_rng(seed + metric_index * 100_000 + group_index)
+            draw_indices = rng.integers(0, len(values), size=(n_boot, len(values)))
+            estimates = values[draw_indices].mean(axis=1)
+            rows.append(
+                {
+                    **dict(zip(INFERENCE_GROUP_KEYS, keys, strict=True)),
+                    "metric": metric,
+                    "estimate": float(values.mean()),
+                    "ci_low": float(np.quantile(estimates, 0.025)),
+                    "ci_high": float(np.quantile(estimates, 0.975)),
+                    "n_questions": int(len(values)),
+                    "n_boot": int(n_boot),
+                    "seed": int(seed + metric_index * 100_000 + group_index),
+                    "resampling_unit": "question_id",
+                }
+            )
+            group_index += 1
+    return pd.DataFrame(rows)
+
+
+def _cluster_table(
+    profiles: pd.DataFrame,
+    metrics: Sequence[str],
+    *,
+    n_permutations: int,
+    seed: int,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for metric_index, metric in enumerate(metrics):
+        if metric not in profiles or "is_correct" not in profiles:
+            continue
+        data = profiles.copy()
+        data[metric] = pd.to_numeric(data[metric], errors="coerce")
+        data = data.loc[data["is_correct"].notna() & np.isfinite(data[metric])]
+        coverage = f"profile_coverage_count_{metric}"
+        if coverage in data:
+            data = data.loc[data[coverage] > 0]
+        if data.empty:
+            continue
+        for group_index, (keys, group) in enumerate(
+            data.groupby(INFERENCE_GROUP_KEYS, dropna=False, sort=True)
+        ):
+            rollout = (
+                group.groupby(["question_id", "is_correct", "layer_index"], dropna=False)
+                .agg(value=(metric, "mean"))
+                .reset_index()
+            )
+            correct = rollout.loc[rollout["is_correct"].astype(bool)]
+            wrong = rollout.loc[~rollout["is_correct"].astype(bool)]
+            correct = correct.groupby(["question_id", "layer_index"], as_index=False)[
+                "value"
+            ].mean()
+            wrong = wrong.groupby(["question_id", "layer_index"], as_index=False)[
+                "value"
+            ].mean()
+            paired = correct.merge(
+                wrong,
+                on=["question_id", "layer_index"],
+                how="inner",
+                suffixes=("_correct", "_wrong"),
+            )
+            if paired.empty:
+                rows.append(
+                    {
+                        **dict(zip(INFERENCE_GROUP_KEYS, keys, strict=True)),
+                        "metric": metric,
+                        "cluster_id": -1,
+                        "coverage_ok": False,
+                        "unsupported_reason": "no mixed-outcome questions",
+                        "n_questions": 0,
+                        "n_permutations": int(n_permutations),
+                        "seed": int(seed),
+                        "correction_method": "question_sign_flip_max_cluster_mass",
+                    }
+                )
+                continue
+            layers = sorted(paired["layer_index"].unique())
+            matrix = (
+                paired.pivot(index="question_id", columns="layer_index", values="value_correct")
+                - paired.pivot(index="question_id", columns="layer_index", values="value_wrong")
+            ).reindex(columns=layers)
+            matrix = matrix.dropna(how="all")
+            if len(matrix) < 2:
+                rows.append(
+                    {
+                        **dict(zip(INFERENCE_GROUP_KEYS, keys, strict=True)),
+                        "metric": metric,
+                        "cluster_id": -1,
+                        "coverage_ok": False,
+                        "unsupported_reason": "fewer than two mixed-outcome questions",
+                        "n_questions": int(len(matrix)),
+                        "n_permutations": int(n_permutations),
+                        "seed": int(seed),
+                        "correction_method": "question_sign_flip_max_cluster_mass",
+                    }
+                )
+                continue
+            clusters = cluster_signflip(
+                matrix.to_numpy(float),
+                n_permutations=n_permutations,
+                seed=seed + metric_index * 100_000 + group_index,
+            )
+            if clusters.empty:
+                rows.append(
+                    {
+                        **dict(zip(INFERENCE_GROUP_KEYS, keys, strict=True)),
+                        "metric": metric,
+                        "cluster_id": -1,
+                        "coverage_ok": True,
+                        "unsupported_reason": "no supra-threshold clusters",
+                        "n_questions": int(len(matrix)),
+                        "n_permutations": int(n_permutations),
+                        "seed": int(seed),
+                        "correction_method": "question_sign_flip_max_cluster_mass",
+                    }
+                )
+                continue
+            for cluster in clusters.to_dict(orient="records"):
+                cluster.update(
+                    {
+                        **dict(zip(INFERENCE_GROUP_KEYS, keys, strict=True)),
+                        "metric": metric,
+                        "coverage_ok": True,
+                        "unsupported_reason": "",
+                        "relative_start_depth": float(
+                            layers[int(cluster["start_index"])] / max(layers)
+                        )
+                        if max(layers)
+                        else 0.0,
+                        "relative_end_depth": float(
+                            layers[int(cluster["end_index"])] / max(layers)
+                        )
+                        if max(layers)
+                        else 0.0,
+                    }
+                )
+                rows.append(cluster)
+    return pd.DataFrame(rows)
+
+
+def _nuisance_table(
+    profiles: pd.DataFrame,
+    metrics: Sequence[str],
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    group_keys = INFERENCE_GROUP_KEYS + ["layer_index", "relative_depth"]
+    for metric in metrics:
+        if metric not in profiles:
+            continue
+        data = profiles.copy()
+        data[metric] = pd.to_numeric(data[metric], errors="coerce")
+        for keys, group in data.groupby(group_keys, dropna=False, sort=True):
+            try:
+                result = fit_nuisance_controlled_effects(
+                    group,
+                    metric,
+                    INFERENCE_CONTROLS,
+                )
+            except ValueError as exc:
+                result = pd.DataFrame(
+                    [
+                        {
+                            "term": "is_correct",
+                            "coverage_ok": False,
+                            "unsupported_reason": str(exc),
+                            "n_questions": 0,
+                        }
+                    ]
+                )
+            for row in result.to_dict(orient="records"):
+                rows.append(
+                    {
+                        **dict(zip(group_keys, keys, strict=True)),
+                        "metric": metric,
+                        **row,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def _paired_table(profiles: pd.DataFrame, metrics: Sequence[str]) -> pd.DataFrame:
+    rows: list[pd.DataFrame] = []
+    pair_keys = [
+        "model_family",
+        "question_id",
+        "rollout_id",
+        "representation",
+        "stage",
+        "layer_index",
+    ]
+    for metric in metrics:
+        if metric not in profiles:
+            continue
+        for family, family_frame in profiles.groupby("model_family", dropna=False, sort=True):
+            conditions = sorted(family_frame["condition"].dropna().unique())
+            if "base" not in conditions:
+                continue
+            for target in [condition for condition in conditions if condition != "base"]:
+                selected = family_frame[pair_keys + ["condition", metric]].copy()
+                try:
+                    paired = paired_condition_delta(
+                        selected,
+                        "base",
+                        target,
+                        pair_keys,
+                    )
+                    paired["model_family"] = family
+                    paired["metric"] = metric
+                    paired["base_value"] = paired[f"{metric}_base"]
+                    paired["target_value"] = paired[f"{metric}_target"]
+                    paired["value_delta"] = paired[f"{metric}_delta"]
+                    rows.append(paired)
+                except ValueError as exc:
+                    rows.append(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "model_family": family,
+                                    "metric": metric,
+                                    "target_condition": target,
+                                    "pairing_status": "unavailable",
+                                    "unsupported_reason": str(exc),
+                                    "n_pairs": 0,
+                                }
+                            ]
+                        )
+                    )
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _standardized_table(profiles: pd.DataFrame, metrics: Sequence[str]) -> pd.DataFrame:
+    rows: list[pd.DataFrame] = []
+    for metric in metrics:
+        if metric not in profiles:
+            continue
+        try:
+            standardized = standardize_within_family_base(profiles, metric)
+        except ValueError:
+            continue
+        standardized = standardized.copy()
+        standardized["metric"] = metric
+        standardized["base_standardized_value"] = standardized[
+            f"base_standardized_{metric}"
+        ]
+        keep = [
+            column
+            for column in (
+                "record_id",
+                "model_family",
+                "model_name",
+                "condition",
+                "question_id",
+                "rollout_id",
+                "is_correct",
+                "representation",
+                "stage",
+                "layer_index",
+                "relative_depth",
+                "metric",
+                metric,
+                f"base_mean_{metric}",
+                f"base_std_{metric}",
+                "base_standardized_value",
+                "standardization_ok",
+                "standardization_scope",
+            )
+            if column in standardized
+        ]
+        rows.append(standardized[keep].rename(columns={metric: "value"}))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def render_inference_report(
+    profiles_path: Path,
+    output_dir: Path,
+    metrics: Sequence[str],
+    *,
+    n_boot: int = 200,
+    n_permutations: int = 199,
+    seed: int = 20260818,
+) -> dict[str, Any]:
+    if n_boot < 1 or n_permutations < 1:
+        raise ValueError("inference resampling counts must be positive")
+    profiles = pd.read_parquet(profiles_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tables = {
+        "question_bootstrap": _question_bootstrap_table(
+            profiles, metrics, n_boot=n_boot, seed=seed
+        ),
+        "cluster_permutation": _cluster_table(
+            profiles, metrics, n_permutations=n_permutations, seed=seed
+        ),
+        "nuisance_effects": _nuisance_table(profiles, metrics),
+        "paired_condition_deltas": _paired_table(profiles, metrics),
+        "base_standardized_profiles": _standardized_table(profiles, metrics),
+    }
+    paths: dict[str, str] = {}
+    for name, table in tables.items():
+        path = output_dir / f"{name}.parquet"
+        atomic_parquet(table, path)
+        paths[name] = str(path)
+    audit = {
+        "passed": True,
+        "metrics": list(metrics),
+        "n_boot": int(n_boot),
+        "n_permutations": int(n_permutations),
+        "seed": int(seed),
+        "question_bootstrap_rows": int(len(tables["question_bootstrap"])),
+        "cluster_rows": int(len(tables["cluster_permutation"])),
+        "nuisance_rows": int(len(tables["nuisance_effects"])),
+        "paired_rows": int(len(tables["paired_condition_deltas"])),
+        "standardized_rows": int(len(tables["base_standardized_profiles"])),
+        "tables": paths,
+    }
+    write_json_atomic(audit, output_dir / "inference_audit.json")
     return audit

@@ -60,9 +60,12 @@ def test_v01_pipeline_produces_audited_profiles_figures_and_status(tmp_path):
     assert set(final_audit["audits"]) == {
         "analysis",
         "calibration",
+        "inference",
         "input",
         "profiles",
     }
+    assert (output_root / "analysis" / "inference" / "question_bootstrap.parquet").is_file()
+    assert (output_root / "analysis" / "inference" / "cluster_permutation.parquet").is_file()
 
 
 def test_formal_pipeline_requires_external_passing_approval(tmp_path):

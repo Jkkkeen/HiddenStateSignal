@@ -17,7 +17,7 @@ from .audit import (
 from .calibrate import BaseCalibrator, fit_base_calibrator, save_calibrator
 from .config import DatasetConfig, VerticalConfig
 from .inspect import inspect_source
-from .plotting import render_v01_report
+from .plotting import render_inference_report, render_v01_report
 from .profiles import (
     DEFAULT_REPORT_METRICS,
     METRIC_REGISTRY,
@@ -276,11 +276,20 @@ def run_pipeline(
             output_root / "analysis",
             DEFAULT_REPORT_METRICS,
         )
+        render_inference_report(
+            profiles_path,
+            output_root / "analysis" / "inference",
+            DEFAULT_REPORT_METRICS,
+            n_boot=100 if mode == "smoke" else 500,
+            n_permutations=99 if mode == "smoke" else 499,
+            seed=20260818,
+        )
         audit_paths = {
             "input": input_audit_path,
             "calibration": output_root / "audit" / "calibration_audit.json",
             "profiles": profiles_path.with_suffix(".audit.json"),
             "analysis": output_root / "analysis" / "analysis_audit.json",
+            "inference": output_root / "analysis" / "inference" / "inference_audit.json",
         }
         final = finalize_run(audit_paths, output_root)
         result = {
