@@ -112,23 +112,21 @@ def fit_base_calibrator(
     records: Iterable[VerticalRecord],
     representation: str,
 ) -> BaseCalibrator:
-    materialized = list(records)
-    if not materialized:
-        raise ValueError("Base calibrator requires at least one record")
-    if any(record.metadata.condition != "base" for record in materialized):
-        raise ValueError("Base calibrator accepts Base records only")
-    families = {record.metadata.model_family for record in materialized}
-    if len(families) != 1:
-        raise ValueError("Base calibrator records must share one model_family")
-
-    family = next(iter(families))
     common_sum: np.ndarray | None = None
     coordinate_sum: np.ndarray | None = None
     coordinate_square_sum: np.ndarray | None = None
+    family: str | None = None
+    record_count = 0
     chunk_count = 0
     digest = hashlib.sha256()
     expected_shape: tuple[int, int] | None = None
-    for record in materialized:
+    for record in records:
+        if record.metadata.condition != "base":
+            raise ValueError("Base calibrator accepts Base records only")
+        if family is None:
+            family = record.metadata.model_family
+        elif record.metadata.model_family != family:
+            raise ValueError("Base calibrator records must share one model_family")
         trajectory = trajectory_for_record(record, representation).astype(np.float64)
         if trajectory.ndim != 3 or trajectory.shape[0] < 1:
             raise ValueError("calibration trajectory must have shape (chunk, layer, dim)")
@@ -146,15 +144,18 @@ def fit_base_calibrator(
         common_sum += trajectory.mean(axis=0)
         coordinate_sum += trajectory.sum(axis=0)
         coordinate_square_sum += np.square(trajectory).sum(axis=0)
+        record_count += 1
         chunk_count += int(trajectory.shape[0])
         digest.update(record.metadata.record_id.encode("utf-8"))
         digest.update(record.metadata.source_path.encode("utf-8"))
         digest.update(np.asarray(trajectory, dtype=np.float32).tobytes())
 
+    if record_count == 0 or family is None:
+        raise ValueError("Base calibrator requires at least one record")
     assert common_sum is not None
     assert coordinate_sum is not None
     assert coordinate_square_sum is not None
-    common = common_sum / len(materialized)
+    common = common_sum / record_count
     mean = coordinate_sum / chunk_count
     variance = np.maximum(coordinate_square_sum / chunk_count - mean * mean, 0.0)
     calibrator = BaseCalibrator(
@@ -164,7 +165,7 @@ def fit_base_calibrator(
         model_family=family,
         representation=representation,
         input_sha256=digest.hexdigest(),
-        n_records=len(materialized),
+        n_records=record_count,
         n_chunks=chunk_count,
     )
     calibrator.validate()

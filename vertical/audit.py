@@ -155,13 +155,20 @@ def write_profile_partition(
     writer: pq.ParquetWriter | None = None
     expected_rows = 0
     record_count = 0
-    seen_ids: set[tuple[str, str]] = set()
+    seen_ids: set[tuple[Any, ...]] = set()
     representations: set[str] = set()
     digest = hashlib.sha256()
     try:
         for record in records:
             record.validate()
-            identity = (record.metadata.model_family, record.metadata.record_id)
+            identity = (
+                record.metadata.model_family,
+                record.metadata.model_name,
+                record.metadata.condition,
+                record.metadata.checkpoint,
+                record.metadata.global_step,
+                record.metadata.record_id,
+            )
             if identity in seen_ids:
                 raise ValueError(f"duplicate profile record: {identity}")
             seen_ids.add(identity)
@@ -220,7 +227,17 @@ def write_profile_partition(
     actual_rows = int(pq.ParquetFile(output_path).metadata.num_rows)
     frame = pd.read_parquet(output_path)
     unique_rows = not frame.duplicated(
-        ["model_family", "record_id", "representation", "stage", "layer_index"]
+        [
+            "model_family",
+            "model_name",
+            "condition",
+            "checkpoint",
+            "global_step",
+            "record_id",
+            "representation",
+            "stage",
+            "layer_index",
+        ]
     ).any()
     structural = _profile_structural_checks(frame)
     gates = {
@@ -264,4 +281,3 @@ def load_completed_partition(path: Path, audit_path: Path) -> pd.DataFrame:
     if "output_sha256" in audit and audit["output_sha256"] != sha256_file(path):
         raise ValueError("completed partition audit hash does not match")
     return frame
-
