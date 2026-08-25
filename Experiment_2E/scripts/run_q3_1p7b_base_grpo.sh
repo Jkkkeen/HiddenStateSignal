@@ -2,6 +2,8 @@
 set -euo pipefail
 
 MODE=${MODE:-smoke5}
+BEHAVIOR_REWARD_ENABLED=${BEHAVIOR_REWARD_ENABLED:-0}
+BEHAVIOR_LAMBDA=${BEHAVIOR_LAMBDA:-0.2}
 ENV_ROOT=${ENV_ROOT:-/data2/hjk/envs/verl_qwen3vl_py311}
 VERL_ROOT=${VERL_ROOT:-/data2/hjk/projects/verl_q3_1p7b_base_20260814}
 PROJECT_ROOT=${PROJECT_ROOT:-/data2/hjk/projects/Experiment_2E_q3_1p7b_20260814}
@@ -16,6 +18,14 @@ case "${USE_REMOVE_PADDING}" in
   True|False) ;;
   *) echo "USE_REMOVE_PADDING must be True or False" >&2; exit 2 ;;
 esac
+case "${BEHAVIOR_REWARD_ENABLED}" in
+  0|1) ;;
+  *) echo "BEHAVIOR_REWARD_ENABLED must be 0 or 1" >&2; exit 2 ;;
+esac
+if ! [[ "${BEHAVIOR_LAMBDA}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "BEHAVIOR_LAMBDA must be a non-negative decimal" >&2
+  exit 2
+fi
 
 case "${MODE}" in
   smoke5) TOTAL_STEPS=5; SAVE_FREQ=5; TEST_FREQ=5; RUN_SUFFIX=smoke; RESUME_MODE=disable; VAL_BEFORE=True ;;
@@ -32,9 +42,15 @@ export HYDRA_FULL_ERROR=1 WANDB_MODE=disabled
 export RAY_TMPDIR=${RAY_TMPDIR:-/data2/hjk/r/q3b17}
 export TMPDIR=${TMPDIR:-/data2/hjk/t/q3b17}
 export RAY_memory_usage_threshold=0.99
-export HIDDEN_PROBE_RATE=${HIDDEN_PROBE_RATE:-1.0}
+if [[ "${BEHAVIOR_REWARD_ENABLED}" == "1" ]]; then
+  export HIDDEN_PROBE_RATE=0.0
+else
+  export HIDDEN_PROBE_RATE=${HIDDEN_PROBE_RATE:-1.0}
+fi
 export HIDDEN_PROBE_INTERVAL=${HIDDEN_PROBE_INTERVAL:-1}
 export HIDDEN_PROBE_GROUP_LIMIT=${HIDDEN_PROBE_GROUP_LIMIT:-32}
+export EXPERIMENT_2E_BEHAVIOR_REWARD="${BEHAVIOR_REWARD_ENABLED}"
+export EXPERIMENT_2E_BEHAVIOR_LAMBDA="${BEHAVIOR_LAMBDA}"
 if ! [[ "${HIDDEN_PROBE_GROUP_LIMIT}" =~ ^[0-9]+$ ]] || \
    (( HIDDEN_PROBE_GROUP_LIMIT < 1 || HIDDEN_PROBE_GROUP_LIMIT > 32 )); then
   echo "HIDDEN_PROBE_GROUP_LIMIT must be an integer in 1..32" >&2
@@ -60,8 +76,9 @@ if [[ "${MODE}" == "formal" ]]; then
   TOTAL_STEPS=${FORMAL_STEPS}
   TRAIN_FILE=${FORMAL_TRAIN_FILE}
   VAL_FILE=${HELDOUT_FILE}
-  : "${SMOKE_APPROVAL:?formal mode requires SMOKE_APPROVAL}"
-  "${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
+  if [[ "${BEHAVIOR_REWARD_ENABLED}" != "1" ]]; then
+    : "${SMOKE_APPROVAL:?formal mode requires SMOKE_APPROVAL}"
+    "${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1],encoding='utf-8'))
 assert p.get('status')=='passed', p
@@ -70,16 +87,17 @@ assert p.get('dashboard_image_count') == 141, p
 assert p.get('hidden_probe_interval') in (1, 5), p
 assert p.get('hidden_probe_group_limit') in (16, 32), p
 PY
-  mapfile -t APPROVED_PROBE < <("${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
+    mapfile -t APPROVED_PROBE < <("${ENV_ROOT}/bin/python" - "${SMOKE_APPROVAL}" <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1],encoding='utf-8'))
 print(p['hidden_probe_group_limit'])
 print(p['hidden_probe_interval'])
 PY
-)
-  HIDDEN_PROBE_GROUP_LIMIT=${APPROVED_PROBE[0]}
-  HIDDEN_PROBE_INTERVAL=${APPROVED_PROBE[1]}
-  export HIDDEN_PROBE_GROUP_LIMIT HIDDEN_PROBE_INTERVAL
+    )
+    HIDDEN_PROBE_GROUP_LIMIT=${APPROVED_PROBE[0]}
+    HIDDEN_PROBE_INTERVAL=${APPROVED_PROBE[1]}
+    export HIDDEN_PROBE_GROUP_LIMIT HIDDEN_PROBE_INTERVAL
+  fi
 else
   TRAIN_FILE=${SMOKE_FILE}
   VAL_FILE=${SMOKE_VAL_FILE}
@@ -119,7 +137,8 @@ if [[ -r "${SWANLAB_ENV_FILE}" ]]; then
   export SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR:-/data2/hjk/logs/experiment_2e/swanlab/${RUN_NAME}}
   mkdir -p "${SWANLAB_LOG_DIR}"
   TRAINER_LOGGER='["console","swanlab"]'
-  "${ENV_ROOT}/bin/python" -m verl.hidden_probe.dashboard_sidecar \
+  if [[ "${BEHAVIOR_REWARD_ENABLED}" != "1" ]]; then
+    "${ENV_ROOT}/bin/python" -m verl.hidden_probe.dashboard_sidecar \
     --history "${HIDDEN_PROBE_HISTORY_JSONL}" \
     --heldout-history "${HIDDEN_PROBE_HELDOUT_JSONL}" \
     --output-dir "${FIGURE_DIR}" \
@@ -130,7 +149,8 @@ if [[ -r "${SWANLAB_ENV_FILE}" ]]; then
     --run-id "${SWANLAB_RUN_ID}" \
     --log-dir "${SWANLAB_LOG_DIR}/hidden_sidecar" \
     --total-steps "${TOTAL_STEPS}" &
-  SIDECAR_PID=$!
+    SIDECAR_PID=$!
+  fi
 fi
 
 finish_sidecar() {
@@ -140,7 +160,7 @@ finish_sidecar() {
 trap finish_sidecar EXIT
 
 cat > "${RESULT_ROOT}/resolved_shell_config.json" <<JSON
-{"mode":"${MODE}","dataset":"${DATASET}","steps":${TOTAL_STEPS},"train_batch_size":32,"rollout_n":8,"ppo_mini_batch_size_prompts":8,"max_response_length":${MAX_RESPONSE_LENGTH},"attention_implementation":"sdpa","remove_padding":${USE_REMOVE_PADDING,,},"dataloader_num_workers":0,"hidden_schema":"hidden_dashboard_v1_141x4","hidden_stride":128,"hidden_probe_rate":${HIDDEN_PROBE_RATE},"hidden_probe_group_limit":${HIDDEN_PROBE_GROUP_LIMIT},"hidden_probe_interval":${HIDDEN_PROBE_INTERVAL},"model":"${MODEL_PATH}"}
+{"mode":"${MODE}","dataset":"${DATASET}","steps":${TOTAL_STEPS},"train_batch_size":32,"rollout_n":8,"ppo_mini_batch_size_prompts":8,"max_response_length":${MAX_RESPONSE_LENGTH},"attention_implementation":"sdpa","remove_padding":${USE_REMOVE_PADDING,,},"dataloader_num_workers":0,"behavior_reward_enabled":${BEHAVIOR_REWARD_ENABLED},"behavior_lambda":${BEHAVIOR_LAMBDA},"hidden_schema":"hidden_dashboard_v1_141x4","hidden_stride":128,"hidden_probe_rate":${HIDDEN_PROBE_RATE},"hidden_probe_group_limit":${HIDDEN_PROBE_GROUP_LIMIT},"hidden_probe_interval":${HIDDEN_PROBE_INTERVAL},"model":"${MODEL_PATH}"}
 JSON
 
 cd "${VERL_ROOT}"

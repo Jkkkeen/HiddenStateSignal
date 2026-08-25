@@ -38,3 +38,13 @@ def test_q3_formal_runner_reads_probe_settings_from_approval() -> None:
     assert "p['hidden_probe_group_limit']" in text
     assert "p['hidden_probe_interval']" in text
     assert "export HIDDEN_PROBE_GROUP_LIMIT HIDDEN_PROBE_INTERVAL" in text
+
+
+def test_q3_behavior_reward_switch_and_lambda_are_forwarded() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "BEHAVIOR_REWARD_ENABLED=${BEHAVIOR_REWARD_ENABLED:-0}" in text
+    assert "BEHAVIOR_LAMBDA=${BEHAVIOR_LAMBDA:-0.2}" in text
+    assert "EXPERIMENT_2E_BEHAVIOR_REWARD" in text
+    assert "EXPERIMENT_2E_BEHAVIOR_LAMBDA" in text
+    assert '"behavior_reward_enabled":${BEHAVIOR_REWARD_ENABLED}' in text
+    assert '"behavior_lambda":${BEHAVIOR_LAMBDA}' in text
